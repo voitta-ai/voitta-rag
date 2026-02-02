@@ -1,5 +1,8 @@
 """Item details API for sidebar."""
 
+from collections import defaultdict
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -8,6 +11,15 @@ from ..deps import DB, CurrentUser, Filesystem, Metadata
 from ...db.models import FolderIndexStatus, IndexedFile, UserFolderSetting
 
 router = APIRouter()
+
+
+class FileTypeStat(BaseModel):
+    """Stats for a single file type."""
+
+    extension: str
+    total_count: int
+    indexed_count: int
+    chunk_count: int
 
 
 class ItemDetailsResponse(BaseModel):
@@ -22,6 +34,7 @@ class ItemDetailsResponse(BaseModel):
     # Folder-specific (only if is_dir)
     folder_enabled: bool | None = None
     index_status: str | None = None
+    file_type_stats: list[FileTypeStat] | None = None
     # File-specific index info (only if not is_dir)
     chunk_count: int | None = None
     indexed_at: str | None = None
@@ -54,6 +67,8 @@ async def get_item_details(
     chunk_count = None
     indexed_at = None
 
+    file_type_stats = None
+
     if is_dir:
         # Get folder enabled setting for this user
         result = await db.execute(
@@ -71,6 +86,9 @@ async def get_item_details(
         )
         status_row = result.scalar_one_or_none()
         index_status = status_row.status if status_row else "none"
+
+        # Calculate file type stats (recursive)
+        file_type_stats = await _get_file_type_stats(fs, db, path)
     else:
         # Get file index info
         result = await db.execute(
@@ -92,6 +110,71 @@ async def get_item_details(
         metadata_updated_by=metadata_updated_by,
         folder_enabled=folder_enabled,
         index_status=index_status,
+        file_type_stats=file_type_stats,
         chunk_count=chunk_count,
         indexed_at=indexed_at,
     )
+
+
+async def _get_file_type_stats(fs: Filesystem, db: DB, folder_path: str) -> list[FileTypeStat]:
+    """Get file type statistics for a folder (recursive)."""
+    # Get the absolute path to the folder
+    root = fs.root
+    abs_folder_path = root / folder_path if folder_path else root
+
+    if not abs_folder_path.exists() or not abs_folder_path.is_dir():
+        return []
+
+    # Count files by extension from filesystem
+    ext_counts: dict[str, int] = defaultdict(int)
+    file_paths_by_ext: dict[str, list[str]] = defaultdict(list)
+
+    for item in abs_folder_path.rglob("*"):
+        if item.is_file() and not item.name.startswith("."):
+            ext = item.suffix.lower() if item.suffix else "(no extension)"
+            ext_counts[ext] += 1
+            # Store relative path for DB lookup
+            try:
+                rel_path = str(item.relative_to(root))
+                file_paths_by_ext[ext].append(rel_path)
+            except ValueError:
+                continue
+
+    if not ext_counts:
+        return []
+
+    # Get all file paths in this folder for DB query
+    all_file_paths = []
+    for paths in file_paths_by_ext.values():
+        all_file_paths.extend(paths)
+
+    # Query indexed files
+    result = await db.execute(
+        select(IndexedFile).where(IndexedFile.file_path.in_(all_file_paths))
+    )
+    indexed_files = {f.file_path: f for f in result.scalars().all()}
+
+    # Build stats per extension
+    stats = []
+    for ext, total_count in ext_counts.items():
+        indexed_count = 0
+        chunk_count = 0
+
+        for file_path in file_paths_by_ext[ext]:
+            if file_path in indexed_files:
+                indexed_count += 1
+                chunk_count += indexed_files[file_path].chunk_count or 0
+
+        stats.append(
+            FileTypeStat(
+                extension=ext,
+                total_count=total_count,
+                indexed_count=indexed_count,
+                chunk_count=chunk_count,
+            )
+        )
+
+    # Sort by total count descending
+    stats.sort(key=lambda s: s.total_count, reverse=True)
+
+    return stats
