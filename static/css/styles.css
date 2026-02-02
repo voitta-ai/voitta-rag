@@ -608,6 +608,30 @@ a:hover {
     background: rgba(255, 59, 48, 0.1);
 }
 
+/* File Index Info Grid */
+.index-info-grid {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.index-info-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: var(--font-size-sm);
+}
+
+.index-info-label {
+    color: var(--color-text-secondary);
+}
+
+#file-chunk-count,
+#file-indexed-at {
+    color: var(--color-text);
+    font-weight: var(--font-weight-medium);
+}
+
 [data-theme="dark"] .index-status-value.status-indexed {
     background: rgba(52, 199, 89, 0.2);
 }

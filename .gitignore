@@ -54,3 +54,4 @@ Thumbs.db
 # Project specific
 data/*
 !data/.gitkeep
+qdrant_storage/

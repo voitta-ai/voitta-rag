@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from .api.routes import api_router
 from .config import get_settings
 from .db.database import init_db
+from .services.indexing_worker import get_indexing_worker
 from .services.watcher import file_watcher
 
 # Get project root for static files and templates
@@ -23,11 +24,20 @@ async def lifespan(app: FastAPI):
     # Initialize database
     init_db()
 
-    # Start filesystem watcher
+    # Get the event loop
     loop = asyncio.get_running_loop()
+
+    # Start filesystem watcher
     file_watcher.start(loop)
 
+    # Start indexing worker
+    indexing_worker = get_indexing_worker()
+    indexing_worker.start(loop)
+
     yield
+
+    # Stop indexing worker
+    indexing_worker.stop()
 
     # Stop filesystem watcher
     file_watcher.stop()

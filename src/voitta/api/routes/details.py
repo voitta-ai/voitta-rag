@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from ..deps import DB, CurrentUser, Filesystem, Metadata
-from ...db.models import FolderIndexStatus, UserFolderSetting
+from ...db.models import FolderIndexStatus, IndexedFile, UserFolderSetting
 
 router = APIRouter()
 
@@ -22,6 +22,9 @@ class ItemDetailsResponse(BaseModel):
     # Folder-specific (only if is_dir)
     folder_enabled: bool | None = None
     index_status: str | None = None
+    # File-specific index info (only if not is_dir)
+    chunk_count: int | None = None
+    indexed_at: str | None = None
 
 
 @router.get("/{path:path}")
@@ -48,6 +51,8 @@ async def get_item_details(
     # Get folder-specific data
     folder_enabled = None
     index_status = None
+    chunk_count = None
+    indexed_at = None
 
     if is_dir:
         # Get folder enabled setting for this user
@@ -66,6 +71,18 @@ async def get_item_details(
         )
         status_row = result.scalar_one_or_none()
         index_status = status_row.status if status_row else "none"
+    else:
+        # Get file index info
+        result = await db.execute(
+            select(IndexedFile).where(IndexedFile.file_path == path)
+        )
+        indexed_file = result.scalar_one_or_none()
+        if indexed_file:
+            index_status = "indexed"
+            chunk_count = indexed_file.chunk_count
+            indexed_at = indexed_file.indexed_at.isoformat() if indexed_file.indexed_at else None
+        else:
+            index_status = "none"
 
     return ItemDetailsResponse(
         path=path,
@@ -75,4 +92,6 @@ async def get_item_details(
         metadata_updated_by=metadata_updated_by,
         folder_enabled=folder_enabled,
         index_status=index_status,
+        chunk_count=chunk_count,
+        indexed_at=indexed_at,
     )

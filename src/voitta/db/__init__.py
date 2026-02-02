@@ -1,10 +1,11 @@
 """Database module."""
 
-from .database import get_db, init_db, reset_engines
-from .models import Base, FileMetadata, FolderIndexStatus, User, UserFolderSetting
+from .database import get_db, get_sync_engine, init_db, reset_engines
+from .models import Base, FileMetadata, FolderIndexStatus, IndexedFile, User, UserFolderSetting
 
 __all__ = [
     "get_db",
+    "get_sync_engine",
     "init_db",
     "reset_engines",
     "Base",
@@ -12,4 +13,5 @@ __all__ = [
     "FileMetadata",
     "UserFolderSetting",
     "FolderIndexStatus",
+    "IndexedFile",
 ]
