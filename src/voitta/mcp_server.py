@@ -50,6 +50,7 @@ class SearchResult(BaseModel):
     file_path: str = Field(description="Path to the source file")
     file_name: str = Field(description="Name of the source file")
     folder_path: str = Field(description="Folder containing the file")
+    index_folder: str = Field(description="Folder at which indexing was triggered")
     chunk_index: int = Field(description="Index of this chunk within the file")
     total_chunks: int = Field(description="Total number of chunks in the file")
     file_metadata: str | None = Field(description="User-added metadata/notes for the file")
@@ -59,7 +60,7 @@ class IndexedFolderInfo(BaseModel):
     """Information about an indexed folder."""
 
     folder_path: str = Field(description="Path to the folder")
-    status: str = Field(description="Index status: indexed, indexing, pending, error, none")
+    status: str = Field(description="Index status: indexed, indexing, pending, disabled, error, none")
     file_count: int = Field(description="Number of indexed files in this folder")
     total_chunks: int = Field(description="Total chunks across all files")
     metadata: str | None = Field(description="User-added metadata/notes for the folder")
@@ -100,15 +101,23 @@ def search(
     vector_store = get_vector_store()
     engine = get_sync_engine()
 
+    # Get disabled folders to exclude from search (by index_folder)
+    with Session(engine) as db:
+        result = db.execute(
+            select(FolderIndexStatus.folder_path).where(FolderIndexStatus.status == "disabled")
+        )
+        disabled_index_folders = [row[0] for row in result.fetchall()]
+
     # Generate query embedding
     query_embedding = embedding_service.embed_query(query)
 
-    # Search vector store
+    # Search vector store (excluding disabled index_folders)
     chunks = vector_store.search(
         query_embedding=query_embedding,
         limit=limit,
         include_folders=include_folders,
         exclude_folders=exclude_folders,
+        exclude_index_folders=disabled_index_folders if disabled_index_folders else None,
     )
 
     # Get file metadata from database
@@ -133,6 +142,7 @@ def search(
                 file_path=chunk.metadata.file_path,
                 file_name=chunk.metadata.file_name,
                 folder_path=chunk.metadata.folder_path,
+                index_folder=chunk.metadata.index_folder,
                 chunk_index=chunk.metadata.chunk_index,
                 total_chunks=chunk.metadata.total_chunks,
                 file_metadata=file_metadata_map.get(chunk.metadata.file_path),
@@ -156,16 +166,18 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
         result = db.execute(select(FolderIndexStatus))
         folder_statuses = {fs.folder_path: fs.status for fs in result.scalars().all()}
 
-        # Get file counts and chunk totals per folder
+        # Get file counts and chunk totals per index_folder (the folder at which indexing was triggered)
         result = db.execute(select(IndexedFile))
         indexed_files = result.scalars().all()
 
         folder_stats: dict[str, dict] = {}
         for f in indexed_files:
-            if f.folder_path not in folder_stats:
-                folder_stats[f.folder_path] = {"file_count": 0, "total_chunks": 0}
-            folder_stats[f.folder_path]["file_count"] += 1
-            folder_stats[f.folder_path]["total_chunks"] += f.chunk_count
+            # Use index_folder if available, otherwise fall back to folder_path
+            idx_folder = getattr(f, "index_folder", None) or f.folder_path
+            if idx_folder not in folder_stats:
+                folder_stats[idx_folder] = {"file_count": 0, "total_chunks": 0}
+            folder_stats[idx_folder]["file_count"] += 1
+            folder_stats[idx_folder]["total_chunks"] += f.chunk_count
 
         # Get folder metadata
         folder_paths = list(set(folder_statuses.keys()) | set(folder_stats.keys()))

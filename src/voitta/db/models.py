@@ -75,7 +75,8 @@ class FolderIndexStatus(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     folder_path: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False, index=True)
-    # Status: none, pending, indexing, indexed, error
+    # Status: none, pending, indexing, indexed, disabled, error
+    # - disabled: chunks are preserved but excluded from MCP searches
     status: Mapped[str] = mapped_column(String(20), default="none")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -92,6 +93,9 @@ class IndexedFile(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     file_path: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False, index=True)
     folder_path: Mapped[str] = mapped_column(String(1000), nullable=False, index=True)
+    index_folder: Mapped[str] = mapped_column(
+        String(1000), nullable=False, index=True
+    )  # The folder at which indexing was triggered
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)  # SHA-256
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)

@@ -2,6 +2,39 @@
 
 Web-based file management system with RAG indexing and real-time monitoring.
 
+## Prerequisites
+
+### Python
+
+Requires Python 3.11+
+
+If using pyenv, ensure these system libraries are installed first:
+
+```bash
+# Ubuntu/Debian
+sudo apt-get install -y build-essential libssl-dev zlib1g-dev \
+  libbz2-dev libreadline-dev libsqlite3-dev curl git \
+  libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev \
+  libffi-dev liblzma-dev
+
+# Then install Python
+pyenv install 3.12
+```
+
+### Dependencies Note
+
+The `transformers` library must be version 4.x (not 5.x) due to compatibility with `sentence-transformers`. This is already constrained in requirements.txt:
+
+```
+transformers>=4.36.0,<5.0.0
+```
+
+If you encounter `ModuleNotFoundError: Could not import module 'PreTrainedModel'`, downgrade transformers:
+
+```bash
+pip install "transformers>=4.36.0,<5.0.0"
+```
+
 ## Quick Start
 
 ### 1. Start Qdrant (Vector Database)
@@ -28,8 +61,8 @@ pip install -e ".[dev]"
 # Copy environment template and configure
 cp .env.example .env
 
-# Run the server
-uvicorn src.voitta.main:app --reload
+# Run the server (binds to 0.0.0.0:8000 by default)
+uvicorn src.voitta.main:app --reload --host 0.0.0.0
 ```
 
 Open http://localhost:8000 in your browser.
