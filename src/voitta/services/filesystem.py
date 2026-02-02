@@ -190,3 +190,20 @@ class FilesystemService:
             breadcrumbs.append((part, current))
 
         return breadcrumbs
+
+    def count_files_recursive(self, relative_path: str) -> int:
+        """Count all files recursively within a folder."""
+        dir_path = self._resolve_path(relative_path)
+
+        if not dir_path.exists() or not dir_path.is_dir():
+            return 0
+
+        count = 0
+        try:
+            for item in dir_path.rglob("*"):
+                if item.is_file() and not item.name.startswith("."):
+                    count += 1
+        except (PermissionError, OSError):
+            pass
+
+        return count

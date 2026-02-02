@@ -502,6 +502,16 @@ a:hover {
     height: 12px;
 }
 
+.index-status-tag .status-icon-sm {
+    width: 10px;
+    height: 10px;
+    flex-shrink: 0;
+}
+
+.folder-stats {
+    font-variant-numeric: tabular-nums;
+}
+
 .index-status-tag.status-none {
     background: rgba(142, 142, 147, 0.12);
     color: var(--color-text-secondary);
@@ -532,6 +542,11 @@ a:hover {
     color: var(--color-error);
 }
 
+.index-status-tag.status-disabled {
+    background: rgba(142, 142, 147, 0.15);
+    color: var(--color-text-secondary);
+}
+
 [data-theme="dark"] .index-status-tag.status-indexed {
     background: rgba(52, 199, 89, 0.25);
 }
@@ -550,6 +565,10 @@ a:hover {
 
 [data-theme="dark"] .index-status-tag.status-error {
     background: rgba(255, 59, 48, 0.25);
+}
+
+[data-theme="dark"] .index-status-tag.status-disabled {
+    background: rgba(142, 142, 147, 0.25);
 }
 
 /* Spinning animation for indexing status */

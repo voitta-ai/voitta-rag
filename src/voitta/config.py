@@ -32,6 +32,8 @@ class Settings:
         # Embedding settings
         self.embedding_model: str = os.getenv("EMBEDDING_MODEL", "intfloat/e5-base-v2")
         self.embedding_dimension: int = int(os.getenv("EMBEDDING_DIMENSION", "768"))
+        # Device: "auto" (default), "cpu", or "cuda"
+        self.embedding_device: str = os.getenv("EMBEDDING_DEVICE", "auto")
 
         # Chunking settings
         self.chunk_size: int = int(os.getenv("CHUNK_SIZE", "512"))
