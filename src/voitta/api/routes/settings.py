@@ -134,3 +134,77 @@ async def get_folder_setting(
         folder_path=path,
         enabled=setting.enabled if setting else False,
     )
+
+
+class ReindexResponse(BaseModel):
+    """Response model for reindex request."""
+
+    folder_path: str
+    status: str
+    message: str
+
+
+@router.post("/folders/{path:path}/reindex")
+async def reindex_folder(
+    path: str,
+    user: CurrentUser,
+    fs: Filesystem,
+    db: DB,
+):
+    """Force re-index a folder by setting status to pending."""
+    if not fs.exists(path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Folder not found: {path}",
+        )
+
+    if not fs.is_dir(path):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Not a folder: {path}",
+        )
+
+    # Check if folder is enabled for this user
+    result = await db.execute(
+        select(UserFolderSetting).where(
+            UserFolderSetting.user_id == user.id,
+            UserFolderSetting.folder_path == path,
+        )
+    )
+    setting = result.scalar_one_or_none()
+
+    if not setting or not setting.enabled:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Folder must be enabled for indexing before re-indexing",
+        )
+
+    # Find or create index status and set to pending
+    result = await db.execute(
+        select(FolderIndexStatus).where(FolderIndexStatus.folder_path == path)
+    )
+    index_status = result.scalar_one_or_none()
+
+    if index_status:
+        if index_status.status == "indexing":
+            return ReindexResponse(
+                folder_path=path,
+                status=index_status.status,
+                message="Folder is already being indexed",
+            )
+        index_status.status = "pending"
+        index_status.error_message = None
+    else:
+        index_status = FolderIndexStatus(
+            folder_path=path,
+            status="pending",
+        )
+        db.add(index_status)
+
+    await db.flush()
+
+    return ReindexResponse(
+        folder_path=path,
+        status="pending",
+        message="Folder queued for re-indexing",
+    )
