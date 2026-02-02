@@ -26,6 +26,7 @@ dependencies = [
     "odfpy>=1.4.0",
     # Indexing and RAG
     "sentence-transformers>=2.2.0",
+    "transformers>=4.36.0",
     "qdrant-client>=1.7.0",
     "torch>=2.0.0",
     # MCP server
