@@ -41,6 +41,11 @@ class Settings:
         # Indexing worker settings
         self.indexing_poll_interval: int = int(os.getenv("INDEXING_POLL_INTERVAL", "10"))
 
+        # MCP server settings
+        self.mcp_port: int = int(os.getenv("MCP_PORT", "8001"))
+        self.mcp_transport: str = os.getenv("MCP_TRANSPORT", "streamable-http")  # streamable-http or sse
+        self.mcp_search_limit: int = int(os.getenv("MCP_SEARCH_LIMIT", "20"))
+
         # Ensure root path exists
         self.root_path.mkdir(parents=True, exist_ok=True)
 

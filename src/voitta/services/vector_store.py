@@ -211,34 +211,66 @@ class VectorStoreService:
         query_embedding: list[float],
         limit: int = 10,
         folder_filter: str | None = None,
+        include_folders: list[str] | None = None,
+        exclude_folders: list[str] | None = None,
     ) -> list[StoredChunk]:
         """Search for similar chunks.
 
         Args:
             query_embedding: The query embedding vector
             limit: Maximum number of results
-            folder_filter: Optional folder path to filter by
+            folder_filter: Optional single folder path to filter by (legacy)
+            include_folders: Optional list of folder paths to include (OR logic)
+            exclude_folders: Optional list of folder paths to exclude
 
         Returns:
             List of matching chunks with scores
         """
-        search_filter = None
+        must_conditions = []
+        must_not_conditions = []
+
+        # Legacy single folder filter
         if folder_filter:
-            search_filter = qmodels.Filter(
-                must=[
-                    qmodels.FieldCondition(
-                        key="folder_path",
-                        match=qmodels.MatchValue(value=folder_filter),
-                    )
-                ]
+            must_conditions.append(
+                qmodels.FieldCondition(
+                    key="folder_path",
+                    match=qmodels.MatchValue(value=folder_filter),
+                )
             )
 
-        results = self.client.search(
+        # Include folders (OR logic - match any of these folders)
+        if include_folders:
+            must_conditions.append(
+                qmodels.FieldCondition(
+                    key="folder_path",
+                    match=qmodels.MatchAny(any=include_folders),
+                )
+            )
+
+        # Exclude folders
+        if exclude_folders:
+            for folder in exclude_folders:
+                must_not_conditions.append(
+                    qmodels.FieldCondition(
+                        key="folder_path",
+                        match=qmodels.MatchValue(value=folder),
+                    )
+                )
+
+        # Build filter
+        search_filter = None
+        if must_conditions or must_not_conditions:
+            search_filter = qmodels.Filter(
+                must=must_conditions if must_conditions else None,
+                must_not=must_not_conditions if must_not_conditions else None,
+            )
+
+        results = self.client.query_points(
             collection_name=self.collection_name,
-            query_vector=query_embedding,
+            query=query_embedding,
             limit=limit,
             query_filter=search_filter,
-        )
+        ).points
 
         chunks = []
         for result in results:
