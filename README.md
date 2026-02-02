@@ -55,6 +55,51 @@ CHUNK_OVERLAP=50
 
 # Indexing worker poll interval (seconds)
 INDEXING_POLL_INTERVAL=10
+
+# MCP server port
+MCP_PORT=8001
+```
+
+## MCP Server (for Claude Code integration)
+
+The MCP server exposes RAG capabilities for Claude Code and other MCP clients.
+
+### Start the MCP Server
+
+```bash
+# Run alongside the main app (in a separate terminal)
+python -m src.voitta.mcp_server
+```
+
+The MCP server runs on port 8001 by default. Configure via `.env`:
+- `MCP_PORT` - Server port (default: 8001)
+- `MCP_TRANSPORT` - `streamable-http` (default) or `sse` (required for Claude Code)
+
+### Available MCP Tools
+
+**`search`** - Semantic search across indexed documents
+- `query`: Search text
+- `limit`: Max results (default: 10)
+- `include_folders`: Optional list of folders to search within
+- `exclude_folders`: Optional list of folders to exclude
+
+**`list_indexed_folders`** - List all indexed folders with status and metadata
+
+**`get_file`** - Retrieve full content of an indexed file by path
+
+### Claude Code Configuration
+
+1. Set `MCP_TRANSPORT=sse` in your `.env` file
+2. Add to your Claude Code MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "voitta-rag": {
+      "url": "http://localhost:8001/sse"
+    }
+  }
+}
 ```
 
 ## Features
@@ -64,6 +109,7 @@ INDEXING_POLL_INTERVAL=10
 - Per-user folder enable/disable for indexing
 - Automatic document indexing (DOCX, PPTX, XLSX, ODT, ODP, ODS)
 - Vector search with Qdrant
+- MCP server for Claude Code integration
 - File change detection via content hashing
 - Global file/folder metadata
 - Dark/light theme support

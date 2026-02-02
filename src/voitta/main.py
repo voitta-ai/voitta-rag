@@ -11,16 +11,22 @@ from fastapi.templating import Jinja2Templates
 from .api.routes import api_router
 from .config import get_settings
 from .db.database import init_db
+from .mcp_server import mcp, UserHeaderMiddleware
 from .services.indexing_worker import get_indexing_worker
 from .services.watcher import file_watcher
 
 # Get project root for static files and templates
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
+# Get MCP app early so we can use its lifespan
+settings = get_settings()
+mcp_app = mcp.http_app(transport=settings.mcp_transport)
+mcp_app.add_middleware(UserHeaderMiddleware)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager."""
+    """Application lifespan manager - composes MCP and app lifespans."""
     # Initialize database
     init_db()
 
@@ -34,7 +40,9 @@ async def lifespan(app: FastAPI):
     indexing_worker = get_indexing_worker()
     indexing_worker.start(loop)
 
-    yield
+    # Run MCP lifespan alongside our own
+    async with mcp_app.lifespan(app):
+        yield
 
     # Stop indexing worker
     indexing_worker.stop()
@@ -45,8 +53,6 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    settings = get_settings()
-
     app = FastAPI(
         title="voitta-rag",
         description="Web-based file management system",
@@ -65,6 +71,9 @@ def create_app() -> FastAPI:
 
     # Include routes
     app.include_router(api_router)
+
+    # Mount MCP server at /mcp
+    app.mount("/mcp", mcp_app)
 
     return app
 
