@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}Welcome - voitta-rag{% endblock %}
+
+{% block content %}
+<div class="landing-container">
+    <div class="landing-card">
+        <h1>Welcome to voitta</h1>
+        <p class="landing-subtitle">Select your profile to continue</p>
+
+        <div class="user-grid">
+            {% for user in users %}
+            <form action="/select-user/{{ user.id }}" method="post" class="user-form">
+                <button type="submit" class="user-card">
+                    <div class="user-avatar">
+                        {{ user.name[0] }}
+                    </div>
+                    <span class="user-name">{{ user.name }}</span>
+                </button>
+            </form>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
