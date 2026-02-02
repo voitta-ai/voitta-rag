@@ -433,6 +433,37 @@ async function toggleFolderEnabled(enabled) {
     }
 }
 
+async function reindexFolder() {
+    // Use selected path or fall back to current path
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) {
+        showToast('No folder selected', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/settings/folders/${encodeURIComponent(targetPath)}/reindex`, {
+            method: 'POST',
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to trigger re-index');
+        }
+
+        showToast(result.message, 'success');
+
+        // Refresh sidebar to show updated status
+        await loadItemDetails(targetPath);
+
+        // Update file list tag for this folder
+        updateFileListIndexStatus(targetPath, result.status);
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
 function updateFileListIndexStatus(path, status) {
     // Find the file item in the list and update its status tag
     const fileItem = document.querySelector(`.file-item[data-path="${path}"]`);

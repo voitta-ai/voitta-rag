@@ -588,8 +588,26 @@ a:hover {
     border-top: 1px solid var(--color-border-light);
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: var(--spacing-sm);
     font-size: var(--font-size-sm);
+}
+
+.index-status-display .index-status-label {
+    flex-shrink: 0;
+}
+
+.index-status-display .index-status-value {
+    flex: 1;
+}
+
+.btn-reindex {
+    padding: var(--spacing-xs);
+    flex-shrink: 0;
+}
+
+.btn-reindex .btn-icon {
+    width: 14px;
+    height: 14px;
 }
 
 .index-status-label {
