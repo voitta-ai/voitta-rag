@@ -19,7 +19,8 @@ class ChunkMetadata:
     """Metadata for a stored chunk."""
 
     file_path: str
-    folder_path: str
+    folder_path: str  # The folder containing the file
+    index_folder: str  # The folder at which indexing was triggered
     file_name: str
     chunk_index: int
     total_chunks: int
@@ -83,6 +84,11 @@ class VectorStoreService:
                 field_name="folder_path",
                 field_schema=qmodels.PayloadSchemaType.KEYWORD,
             )
+            self._client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="index_folder",
+                field_schema=qmodels.PayloadSchemaType.KEYWORD,
+            )
             logger.info(f"Collection '{self.collection_name}' created")
 
     def store_chunks(
@@ -115,6 +121,7 @@ class VectorStoreService:
                         "text": text,
                         "file_path": metadata.file_path,
                         "folder_path": metadata.folder_path,
+                        "index_folder": metadata.index_folder,
                         "file_name": metadata.file_name,
                         "chunk_index": metadata.chunk_index,
                         "total_chunks": metadata.total_chunks,
@@ -206,6 +213,47 @@ class VectorStoreService:
 
         return count
 
+    def delete_by_index_folder(self, index_folder: str) -> int:
+        """Delete all chunks that were indexed from a specific index folder.
+
+        This deletes all chunks where the indexing was triggered from the given folder,
+        including files in subfolders.
+
+        Returns:
+            Number of deleted points
+        """
+        # First count how many we'll delete
+        count_result = self.client.count(
+            collection_name=self.collection_name,
+            count_filter=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="index_folder",
+                        match=qmodels.MatchValue(value=index_folder),
+                    )
+                ]
+            ),
+        )
+        count = count_result.count
+
+        if count > 0:
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=qmodels.FilterSelector(
+                    filter=qmodels.Filter(
+                        must=[
+                            qmodels.FieldCondition(
+                                key="index_folder",
+                                match=qmodels.MatchValue(value=index_folder),
+                            )
+                        ]
+                    )
+                ),
+            )
+            logger.info(f"Deleted {count} chunks for index_folder: {index_folder}")
+
+        return count
+
     def search(
         self,
         query_embedding: list[float],
@@ -213,6 +261,7 @@ class VectorStoreService:
         folder_filter: str | None = None,
         include_folders: list[str] | None = None,
         exclude_folders: list[str] | None = None,
+        exclude_index_folders: list[str] | None = None,
     ) -> list[StoredChunk]:
         """Search for similar chunks.
 
@@ -222,6 +271,7 @@ class VectorStoreService:
             folder_filter: Optional single folder path to filter by (legacy)
             include_folders: Optional list of folder paths to include (OR logic)
             exclude_folders: Optional list of folder paths to exclude
+            exclude_index_folders: Optional list of index_folders to exclude (for disabled folders)
 
         Returns:
             List of matching chunks with scores
@@ -247,12 +297,22 @@ class VectorStoreService:
                 )
             )
 
-        # Exclude folders
+        # Exclude folders by folder_path
         if exclude_folders:
             for folder in exclude_folders:
                 must_not_conditions.append(
                     qmodels.FieldCondition(
                         key="folder_path",
+                        match=qmodels.MatchValue(value=folder),
+                    )
+                )
+
+        # Exclude folders by index_folder (for disabled folders)
+        if exclude_index_folders:
+            for folder in exclude_index_folders:
+                must_not_conditions.append(
+                    qmodels.FieldCondition(
+                        key="index_folder",
                         match=qmodels.MatchValue(value=folder),
                     )
                 )
@@ -282,6 +342,7 @@ class VectorStoreService:
                     metadata=ChunkMetadata(
                         file_path=payload["file_path"],
                         folder_path=payload["folder_path"],
+                        index_folder=payload.get("index_folder", payload["folder_path"]),
                         file_name=payload["file_name"],
                         chunk_index=payload["chunk_index"],
                         total_chunks=payload["total_chunks"],
