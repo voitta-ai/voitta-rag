@@ -127,44 +127,40 @@ async def _get_file_type_stats(fs: Filesystem, db: DB, folder_path: str) -> list
 
     # Count files by extension from filesystem
     ext_counts: dict[str, int] = defaultdict(int)
-    file_paths_by_ext: dict[str, list[str]] = defaultdict(list)
 
     for item in abs_folder_path.rglob("*"):
         if item.is_file() and not item.name.startswith("."):
             ext = item.suffix.lower() if item.suffix else "(no extension)"
             ext_counts[ext] += 1
-            # Store relative path for DB lookup
-            try:
-                rel_path = str(item.relative_to(root))
-                file_paths_by_ext[ext].append(rel_path)
-            except ValueError:
-                continue
 
     if not ext_counts:
         return []
 
-    # Get all file paths in this folder for DB query
-    all_file_paths = []
-    for paths in file_paths_by_ext.values():
-        all_file_paths.extend(paths)
+    # Query indexed files by folder_path prefix (efficient single query)
+    # This uses the folder_path index instead of IN with hundreds of paths
+    if folder_path:
+        # Match exact folder or subfolders
+        result = await db.execute(
+            select(IndexedFile).where(
+                (IndexedFile.folder_path == folder_path) |
+                (IndexedFile.folder_path.startswith(folder_path + "/"))
+            )
+        )
+    else:
+        # Root folder - get all indexed files
+        result = await db.execute(select(IndexedFile))
 
-    # Query indexed files
-    result = await db.execute(
-        select(IndexedFile).where(IndexedFile.file_path.in_(all_file_paths))
-    )
-    indexed_files = {f.file_path: f for f in result.scalars().all()}
+    # Group indexed files by extension
+    indexed_by_ext: dict[str, tuple[int, int]] = defaultdict(lambda: (0, 0))
+    for f in result.scalars().all():
+        ext = Path(f.file_path).suffix.lower() if Path(f.file_path).suffix else "(no extension)"
+        count, chunks = indexed_by_ext[ext]
+        indexed_by_ext[ext] = (count + 1, chunks + (f.chunk_count or 0))
 
     # Build stats per extension
     stats = []
     for ext, total_count in ext_counts.items():
-        indexed_count = 0
-        chunk_count = 0
-
-        for file_path in file_paths_by_ext[ext]:
-            if file_path in indexed_files:
-                indexed_count += 1
-                chunk_count += indexed_files[file_path].chunk_count or 0
-
+        indexed_count, chunk_count = indexed_by_ext.get(ext, (0, 0))
         stats.append(
             FileTypeStat(
                 extension=ext,
