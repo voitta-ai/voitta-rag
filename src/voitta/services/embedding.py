@@ -24,9 +24,19 @@ class EmbeddingService:
     def model(self) -> SentenceTransformer:
         """Lazy load the model."""
         if self._model is None:
+            settings = get_settings()
             logger.info(f"Loading embedding model: {self.model_name}")
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            logger.info(f"Using device: {device}")
+
+            # Determine device based on configuration
+            device_setting = settings.embedding_device.lower()
+            if device_setting == "cpu":
+                device = "cpu"
+            elif device_setting == "cuda":
+                device = "cuda"
+            else:  # "auto" or any other value
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+
+            logger.info(f"Using device: {device} (config: {device_setting})")
             self._model = SentenceTransformer(self.model_name, device=device)
             logger.info(f"Model loaded successfully on {device}")
         return self._model

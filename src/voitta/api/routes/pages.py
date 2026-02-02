@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ..deps import DB, CurrentUser, Filesystem, Metadata, OptionalUser
 from ...db.models import FolderIndexStatus, IndexedFile, User, UserFolderSetting
@@ -109,12 +109,45 @@ async def browse(
     # Get index status for all folders in the listing
     folder_paths = [item.path for item in items if item.is_dir]
     index_statuses = {}
+    folder_stats = {}  # folder_path -> {indexed_files, total_files, total_chunks}
     if folder_paths:
         result = await db.execute(
             select(FolderIndexStatus).where(FolderIndexStatus.folder_path.in_(folder_paths))
         )
         for status in result.scalars().all():
             index_statuses[status.folder_path] = status.status
+
+        # Get folder statistics: indexed files count and total chunks per folder
+        # Query files where index_folder matches the folder (files indexed from that folder)
+        result = await db.execute(
+            select(
+                IndexedFile.index_folder,
+                func.count(IndexedFile.id).label("indexed_count"),
+                func.sum(IndexedFile.chunk_count).label("total_chunks"),
+            )
+            .where(IndexedFile.index_folder.in_(folder_paths))
+            .group_by(IndexedFile.index_folder)
+        )
+        for row in result.fetchall():
+            folder_stats[row.index_folder] = {
+                "indexed_files": row.indexed_count,
+                "total_chunks": row.total_chunks or 0,
+            }
+
+        # Count total files in each folder (recursively) from filesystem
+        for folder_path in folder_paths:
+            try:
+                total_files = fs.count_files_recursive(folder_path)
+                if folder_path in folder_stats:
+                    folder_stats[folder_path]["total_files"] = total_files
+                else:
+                    folder_stats[folder_path] = {
+                        "indexed_files": 0,
+                        "total_files": total_files,
+                        "total_chunks": 0,
+                    }
+            except Exception:
+                pass  # Folder might not exist or be inaccessible
 
     # Get index status for all files in the listing (from IndexedFile table)
     file_paths = [item.path for item in items if not item.is_dir]
@@ -153,6 +186,7 @@ async def browse(
             "metadata_user": metadata_user,
             "folder_enabled": folder_enabled,
             "index_statuses": index_statuses,
+            "folder_stats": folder_stats,
             "file_index_statuses": file_index_statuses,
             "current_index_status": current_index_status,
         },
