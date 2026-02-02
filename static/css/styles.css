@@ -921,7 +921,13 @@ a:hover {
    Indexing Stats Table
    ============================================ */
 .stats-table-container {
+    max-height: 280px;
+    overflow-y: auto;
     overflow-x: auto;
+}
+
+#indexing-stats-section {
+    padding: var(--spacing-md);
 }
 
 .stats-table {
@@ -939,6 +945,9 @@ a:hover {
     font-size: var(--font-size-xs);
     text-transform: uppercase;
     letter-spacing: 0.03em;
+    position: sticky;
+    top: 0;
+    background: var(--color-bg-elevated);
 }
 
 .stats-table th:not(:first-child) {
