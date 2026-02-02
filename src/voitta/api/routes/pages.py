@@ -118,36 +118,35 @@ async def browse(
             index_statuses[status.folder_path] = status.status
 
         # Get folder statistics: indexed files count and total chunks per folder
-        # Query files where index_folder matches the folder (files indexed from that folder)
-        result = await db.execute(
-            select(
-                IndexedFile.index_folder,
-                func.count(IndexedFile.id).label("indexed_count"),
-                func.sum(IndexedFile.chunk_count).label("total_chunks"),
-            )
-            .where(IndexedFile.index_folder.in_(folder_paths))
-            .group_by(IndexedFile.index_folder)
-        )
-        for row in result.fetchall():
-            folder_stats[row.index_folder] = {
-                "indexed_files": row.indexed_count,
-                "total_chunks": row.total_chunks or 0,
-            }
+        # Query all indexed files and filter by path prefix for each folder
+        result = await db.execute(select(IndexedFile))
+        all_indexed_files = result.scalars().all()
 
-        # Count total files in each folder (recursively) from filesystem
+        # Calculate stats for each folder by checking file path prefix
         for folder_path in folder_paths:
+            prefix = folder_path + "/" if folder_path else ""
+            indexed_count = 0
+            total_chunks = 0
+
+            for indexed_file in all_indexed_files:
+                # Check if file is inside this folder (starts with folder path)
+                if indexed_file.file_path.startswith(prefix) or (
+                    not prefix and "/" not in indexed_file.file_path
+                ):
+                    indexed_count += 1
+                    total_chunks += indexed_file.chunk_count or 0
+
+            # Count total files in folder from filesystem
             try:
                 total_files = fs.count_files_recursive(folder_path)
-                if folder_path in folder_stats:
-                    folder_stats[folder_path]["total_files"] = total_files
-                else:
-                    folder_stats[folder_path] = {
-                        "indexed_files": 0,
-                        "total_files": total_files,
-                        "total_chunks": 0,
-                    }
             except Exception:
-                pass  # Folder might not exist or be inaccessible
+                total_files = 0
+
+            folder_stats[folder_path] = {
+                "indexed_files": indexed_count,
+                "total_files": total_files,
+                "total_chunks": total_chunks,
+            }
 
     # Get index status for all files in the listing (from IndexedFile table)
     file_paths = [item.path for item in items if not item.is_dir]
