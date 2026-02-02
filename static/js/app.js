@@ -247,6 +247,8 @@ function updateSidebar(details) {
 
     // Show/hide folder settings section
     const folderSettingsSection = document.getElementById('folder-settings-section');
+    const fileIndexSection = document.getElementById('file-index-section');
+
     if (folderSettingsSection) {
         if (details.is_dir) {
             folderSettingsSection.style.display = 'block';
@@ -272,6 +274,35 @@ function updateSidebar(details) {
             }
         } else {
             folderSettingsSection.style.display = 'none';
+        }
+    }
+
+    // Show/hide file index section
+    if (fileIndexSection) {
+        if (!details.is_dir) {
+            fileIndexSection.style.display = 'block';
+
+            const fileStatusValue = document.getElementById('file-index-status-value');
+            const fileChunkCount = document.getElementById('file-chunk-count');
+            const fileIndexedAt = document.getElementById('file-indexed-at');
+
+            if (fileStatusValue) {
+                fileStatusValue.className = `index-status-value status-${details.index_status || 'none'}`;
+                fileStatusValue.textContent = details.index_status === 'indexed' ? 'Indexed' : 'Not indexed';
+            }
+            if (fileChunkCount) {
+                fileChunkCount.textContent = details.chunk_count ? `${details.chunk_count} chunks` : '—';
+            }
+            if (fileIndexedAt) {
+                if (details.indexed_at) {
+                    const date = new Date(details.indexed_at);
+                    fileIndexedAt.textContent = date.toLocaleString();
+                } else {
+                    fileIndexedAt.textContent = '—';
+                }
+            }
+        } else {
+            fileIndexSection.style.display = 'none';
         }
     }
 
@@ -364,11 +395,41 @@ async function toggleFolderEnabled(enabled) {
         }
 
         showToast(enabled ? 'Folder enabled for indexing' : 'Folder disabled for indexing', 'success');
+
+        // Refresh sidebar to show updated index status
+        await loadItemDetails(targetPath);
+
+        // Update file list tag for this folder
+        updateFileListIndexStatus(targetPath, enabled ? 'pending' : 'none');
     } catch (error) {
         showToast(error.message, 'error');
         // Revert checkbox
         document.getElementById('folder-enabled').checked = !enabled;
     }
+}
+
+function updateFileListIndexStatus(path, status) {
+    // Find the file item in the list and update its status tag
+    const fileItem = document.querySelector(`.file-item[data-path="${path}"]`);
+    if (!fileItem) return;
+
+    fileItem.dataset.indexStatus = status;
+    const statusTag = fileItem.querySelector('.index-status-tag');
+    if (!statusTag) return;
+
+    // Update class
+    statusTag.className = `index-status-tag status-${status}`;
+
+    // Update content
+    const statusLabels = {
+        'indexed': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon"><polyline points="20 6 9 17 4 12"></polyline></svg> Indexed`,
+        'indexing': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon spin"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path></svg> Indexing`,
+        'pending': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg> Pending`,
+        'error': `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon"><circle cx="12" cy="12" r="10"></circle><line x1="15" y1="9" x2="9" y2="15"></line><line x1="9" y1="9" x2="15" y2="15"></line></svg> Error`,
+        'none': 'Not indexed'
+    };
+
+    statusTag.innerHTML = statusLabels[status] || 'Not indexed';
 }
 
 // ============================================

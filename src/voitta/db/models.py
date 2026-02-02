@@ -82,3 +82,20 @@ class FolderIndexStatus(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+
+
+class IndexedFile(Base):
+    """Track indexed files with their content hash for change detection."""
+
+    __tablename__ = "indexed_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    file_path: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False, index=True)
+    folder_path: Mapped[str] = mapped_column(String(1000), nullable=False, index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)  # SHA-256
+    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )

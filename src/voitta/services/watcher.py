@@ -1,15 +1,20 @@
 """Filesystem watcher using watchdog."""
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
+from sqlalchemy.orm import Session
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
 from ..config import get_settings
+from ..db.database import get_sync_engine
+
+logger = logging.getLogger(__name__)
 
 
 class EventType(str, Enum):
@@ -97,8 +102,36 @@ class FileWatcher:
         if self._loop is None:
             return
 
+        # Handle file/folder deletions - remove associated chunks from vector store
+        if event.event_type == EventType.DELETED:
+            self._handle_deletion(event)
+
         # Schedule the async notification in the event loop
         asyncio.run_coroutine_threadsafe(self._notify_subscribers(event), self._loop)
+
+    def _handle_deletion(self, event: FileEvent) -> None:
+        """Handle file or folder deletion by removing associated chunks."""
+        try:
+            from .indexing import get_indexing_service
+
+            engine = get_sync_engine()
+            indexing_service = get_indexing_service()
+
+            with Session(engine) as db:
+                if event.is_dir:
+                    # Remove all file indexes for the deleted folder
+                    count = indexing_service.remove_folder_index(event.path, db)
+                    if count > 0:
+                        logger.info(f"Removed index for {count} files in deleted folder: {event.path}")
+                else:
+                    # Remove single file index
+                    removed = indexing_service.remove_file_index(event.path, db)
+                    if removed:
+                        logger.info(f"Removed index for deleted file: {event.path}")
+
+                db.commit()
+        except Exception as e:
+            logger.error(f"Error handling deletion for {event.path}: {e}")
 
     async def _notify_subscribers(self, event: FileEvent):
         """Notify all subscribers of an event."""
@@ -106,6 +139,20 @@ class FileWatcher:
         for queue in self._subscribers:
             try:
                 await asyncio.wait_for(queue.put(event), timeout=1.0)
+            except asyncio.TimeoutError:
+                dead_queues.add(queue)
+            except Exception:
+                dead_queues.add(queue)
+
+        # Clean up dead queues
+        self._subscribers -= dead_queues
+
+    async def _broadcast(self, data: dict[str, Any]) -> None:
+        """Broadcast a dictionary event to all subscribers."""
+        dead_queues = set()
+        for queue in self._subscribers:
+            try:
+                await asyncio.wait_for(queue.put(data), timeout=1.0)
             except asyncio.TimeoutError:
                 dead_queues.add(queue)
             except Exception:

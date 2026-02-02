@@ -49,7 +49,8 @@
             <div class="file-list" id="file-list">
                 {% if items %}
                 {% for item in items %}
-                {% set item_index_status = index_statuses.get(item.path, 'none') if item.is_dir else none %}
+                {% set item_index_status = index_statuses.get(item.path, 'none') if item.is_dir else (file_index_statuses.get(item.path, {}).get('status', 'none')) %}
+                {% set file_chunk_count = file_index_statuses.get(item.path, {}).get('chunk_count', 0) if not item.is_dir else 0 %}
                 <div class="file-item {% if item.is_dir %}folder{% else %}file{% endif %}"
                      data-path="{{ item.path }}"
                      data-index-status="{{ item_index_status }}"
@@ -66,34 +67,30 @@
                     {% endif %}
                     <span class="file-name">{{ item.name }}</span>
                     <span class="file-size">{{ item.size | filesizeformat }}</span>
-                    <span class="index-status-tag status-{{ item_index_status or 'none' }}" title="Index status: {{ item_index_status or 'none' }}">
-                        {% if item.is_dir %}
-                            {% if item_index_status == 'indexed' %}
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon">
-                                <polyline points="20 6 9 17 4 12"></polyline>
-                            </svg>
-                            Indexed
-                            {% elif item_index_status == 'indexing' %}
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon spin">
-                                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
-                            </svg>
-                            Indexing
-                            {% elif item_index_status == 'pending' %}
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <polyline points="12 6 12 12 16 14"></polyline>
-                            </svg>
-                            Pending
-                            {% elif item_index_status == 'error' %}
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <line x1="15" y1="9" x2="9" y2="15"></line>
-                                <line x1="9" y1="9" x2="15" y2="15"></line>
-                            </svg>
-                            Error
-                            {% else %}
-                            Not indexed
-                            {% endif %}
+                    <span class="index-status-tag status-{{ item_index_status or 'none' }}" title="Index status: {{ item_index_status or 'none' }}{% if file_chunk_count %} ({{ file_chunk_count }} chunks){% endif %}">
+                        {% if item_index_status == 'indexed' %}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon">
+                            <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        {% if item.is_dir %}Indexed{% else %}{{ file_chunk_count }} chunks{% endif %}
+                        {% elif item_index_status == 'indexing' %}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon spin">
+                            <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+                        </svg>
+                        Indexing
+                        {% elif item_index_status == 'pending' %}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <polyline points="12 6 12 12 16 14"></polyline>
+                        </svg>
+                        Pending
+                        {% elif item_index_status == 'error' %}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <line x1="15" y1="9" x2="9" y2="15"></line>
+                            <line x1="9" y1="9" x2="15" y2="15"></line>
+                        </svg>
+                        Error
                         {% else %}
                         —
                         {% endif %}
@@ -154,6 +151,25 @@
                         Not indexed
                         {% endif %}
                     </span>
+                </div>
+            </div>
+
+            <!-- File Index Info (only for files) -->
+            <div class="sidebar-section" id="file-index-section" style="display: none;">
+                <h3>Index Info</h3>
+                <div class="index-info-grid">
+                    <div class="index-info-row">
+                        <span class="index-info-label">Status:</span>
+                        <span class="index-status-value status-none" id="file-index-status-value">Not indexed</span>
+                    </div>
+                    <div class="index-info-row">
+                        <span class="index-info-label">Chunks:</span>
+                        <span id="file-chunk-count">—</span>
+                    </div>
+                    <div class="index-info-row">
+                        <span class="index-info-label">Indexed:</span>
+                        <span id="file-indexed-at">—</span>
+                    </div>
                 </div>
             </div>
 

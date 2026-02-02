@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 
 from ..deps import DB, CurrentUser, Filesystem, Metadata, OptionalUser
-from ...db.models import FolderIndexStatus, User, UserFolderSetting
+from ...db.models import FolderIndexStatus, IndexedFile, User, UserFolderSetting
 
 router = APIRouter()
 
@@ -116,6 +116,20 @@ async def browse(
         for status in result.scalars().all():
             index_statuses[status.folder_path] = status.status
 
+    # Get index status for all files in the listing (from IndexedFile table)
+    file_paths = [item.path for item in items if not item.is_dir]
+    file_index_statuses = {}
+    if file_paths:
+        result = await db.execute(
+            select(IndexedFile).where(IndexedFile.file_path.in_(file_paths))
+        )
+        for indexed_file in result.scalars().all():
+            file_index_statuses[indexed_file.file_path] = {
+                "status": "indexed",
+                "chunk_count": indexed_file.chunk_count,
+                "indexed_at": indexed_file.indexed_at.isoformat() if indexed_file.indexed_at else None,
+            }
+
     # Also get current folder's index status
     current_index_status = None
     if path and fs.is_dir(path):
@@ -139,6 +153,7 @@ async def browse(
             "metadata_user": metadata_user,
             "folder_enabled": folder_enabled,
             "index_statuses": index_statuses,
+            "file_index_statuses": file_index_statuses,
             "current_index_status": current_index_status,
         },
     )

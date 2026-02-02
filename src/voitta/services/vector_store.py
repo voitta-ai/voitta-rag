@@ -1,0 +1,289 @@
+"""Vector store service using Qdrant."""
+
+import logging
+import uuid
+from dataclasses import dataclass
+from datetime import datetime
+
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qmodels
+from qdrant_client.http.exceptions import UnexpectedResponse
+
+from ..config import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ChunkMetadata:
+    """Metadata for a stored chunk."""
+
+    file_path: str
+    folder_path: str
+    file_name: str
+    chunk_index: int
+    total_chunks: int
+    start_char: int
+    end_char: int
+    indexed_at: str  # ISO format
+
+
+@dataclass
+class StoredChunk:
+    """A chunk stored in the vector database."""
+
+    id: str
+    text: str
+    metadata: ChunkMetadata
+    score: float | None = None
+
+
+class VectorStoreService:
+    """Service for storing and retrieving document chunks in Qdrant."""
+
+    def __init__(self):
+        settings = get_settings()
+        self.host = settings.qdrant_host
+        self.port = settings.qdrant_port
+        self.collection_name = settings.qdrant_collection
+        self.dimension = settings.embedding_dimension
+        self._client: QdrantClient | None = None
+
+    @property
+    def client(self) -> QdrantClient:
+        """Lazy load the Qdrant client."""
+        if self._client is None:
+            logger.info(f"Connecting to Qdrant at {self.host}:{self.port}")
+            self._client = QdrantClient(host=self.host, port=self.port)
+            self._ensure_collection()
+        return self._client
+
+    def _ensure_collection(self) -> None:
+        """Ensure the collection exists with proper configuration."""
+        try:
+            self._client.get_collection(self.collection_name)
+            logger.info(f"Collection '{self.collection_name}' exists")
+        except (UnexpectedResponse, Exception):
+            logger.info(f"Creating collection '{self.collection_name}'")
+            self._client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config=qmodels.VectorParams(
+                    size=self.dimension,
+                    distance=qmodels.Distance.COSINE,
+                ),
+            )
+            # Create payload indexes for efficient filtering
+            self._client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="file_path",
+                field_schema=qmodels.PayloadSchemaType.KEYWORD,
+            )
+            self._client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="folder_path",
+                field_schema=qmodels.PayloadSchemaType.KEYWORD,
+            )
+            logger.info(f"Collection '{self.collection_name}' created")
+
+    def store_chunks(
+        self,
+        chunks: list[tuple[str, list[float], ChunkMetadata]],
+    ) -> list[str]:
+        """Store multiple chunks with their embeddings.
+
+        Args:
+            chunks: List of (text, embedding, metadata) tuples
+
+        Returns:
+            List of generated point IDs
+        """
+        if not chunks:
+            return []
+
+        points = []
+        ids = []
+
+        for text, embedding, metadata in chunks:
+            point_id = str(uuid.uuid4())
+            ids.append(point_id)
+
+            points.append(
+                qmodels.PointStruct(
+                    id=point_id,
+                    vector=embedding,
+                    payload={
+                        "text": text,
+                        "file_path": metadata.file_path,
+                        "folder_path": metadata.folder_path,
+                        "file_name": metadata.file_name,
+                        "chunk_index": metadata.chunk_index,
+                        "total_chunks": metadata.total_chunks,
+                        "start_char": metadata.start_char,
+                        "end_char": metadata.end_char,
+                        "indexed_at": metadata.indexed_at,
+                    },
+                )
+            )
+
+        self.client.upsert(collection_name=self.collection_name, points=points)
+        logger.info(f"Stored {len(points)} chunks in Qdrant")
+
+        return ids
+
+    def delete_by_file(self, file_path: str) -> int:
+        """Delete all chunks for a specific file.
+
+        Returns:
+            Number of deleted points
+        """
+        # First count how many we'll delete
+        count_result = self.client.count(
+            collection_name=self.collection_name,
+            count_filter=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="file_path",
+                        match=qmodels.MatchValue(value=file_path),
+                    )
+                ]
+            ),
+        )
+        count = count_result.count
+
+        if count > 0:
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=qmodels.FilterSelector(
+                    filter=qmodels.Filter(
+                        must=[
+                            qmodels.FieldCondition(
+                                key="file_path",
+                                match=qmodels.MatchValue(value=file_path),
+                            )
+                        ]
+                    )
+                ),
+            )
+            logger.info(f"Deleted {count} chunks for file: {file_path}")
+
+        return count
+
+    def delete_by_folder(self, folder_path: str) -> int:
+        """Delete all chunks for files in a specific folder.
+
+        Returns:
+            Number of deleted points
+        """
+        # First count how many we'll delete
+        count_result = self.client.count(
+            collection_name=self.collection_name,
+            count_filter=qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="folder_path",
+                        match=qmodels.MatchValue(value=folder_path),
+                    )
+                ]
+            ),
+        )
+        count = count_result.count
+
+        if count > 0:
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=qmodels.FilterSelector(
+                    filter=qmodels.Filter(
+                        must=[
+                            qmodels.FieldCondition(
+                                key="folder_path",
+                                match=qmodels.MatchValue(value=folder_path),
+                            )
+                        ]
+                    )
+                ),
+            )
+            logger.info(f"Deleted {count} chunks for folder: {folder_path}")
+
+        return count
+
+    def search(
+        self,
+        query_embedding: list[float],
+        limit: int = 10,
+        folder_filter: str | None = None,
+    ) -> list[StoredChunk]:
+        """Search for similar chunks.
+
+        Args:
+            query_embedding: The query embedding vector
+            limit: Maximum number of results
+            folder_filter: Optional folder path to filter by
+
+        Returns:
+            List of matching chunks with scores
+        """
+        search_filter = None
+        if folder_filter:
+            search_filter = qmodels.Filter(
+                must=[
+                    qmodels.FieldCondition(
+                        key="folder_path",
+                        match=qmodels.MatchValue(value=folder_filter),
+                    )
+                ]
+            )
+
+        results = self.client.search(
+            collection_name=self.collection_name,
+            query_vector=query_embedding,
+            limit=limit,
+            query_filter=search_filter,
+        )
+
+        chunks = []
+        for result in results:
+            payload = result.payload
+            chunks.append(
+                StoredChunk(
+                    id=str(result.id),
+                    text=payload["text"],
+                    metadata=ChunkMetadata(
+                        file_path=payload["file_path"],
+                        folder_path=payload["folder_path"],
+                        file_name=payload["file_name"],
+                        chunk_index=payload["chunk_index"],
+                        total_chunks=payload["total_chunks"],
+                        start_char=payload["start_char"],
+                        end_char=payload["end_char"],
+                        indexed_at=payload["indexed_at"],
+                    ),
+                    score=result.score,
+                )
+            )
+
+        return chunks
+
+    def get_collection_info(self) -> dict:
+        """Get information about the collection."""
+        try:
+            info = self.client.get_collection(self.collection_name)
+            return {
+                "name": self.collection_name,
+                "vectors_count": info.vectors_count,
+                "points_count": info.points_count,
+                "status": info.status.value,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+
+# Global singleton instance
+_vector_store: VectorStoreService | None = None
+
+
+def get_vector_store() -> VectorStoreService:
+    """Get the global vector store service instance."""
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = VectorStoreService()
+    return _vector_store
