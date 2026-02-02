@@ -324,6 +324,31 @@ function updateSidebar(details) {
             ? `Last updated by ${details.metadata_updated_by}`
             : '';
     }
+
+    // Update indexing stats section (folders only)
+    const indexingStatsSection = document.getElementById('indexing-stats-section');
+    const indexingStatsBody = document.getElementById('indexing-stats-body');
+
+    if (indexingStatsSection && indexingStatsBody) {
+        if (details.is_dir && details.file_type_stats && details.file_type_stats.length > 0) {
+            indexingStatsSection.style.display = 'block';
+
+            // Build table rows
+            let html = '';
+            for (const stat of details.file_type_stats) {
+                html += `<tr>
+                    <td class="stats-ext">${escapeHtml(stat.extension)}</td>
+                    <td class="stats-num">${stat.total_count}</td>
+                    <td class="stats-num">${stat.indexed_count}</td>
+                    <td class="stats-num">${stat.chunk_count}</td>
+                </tr>`;
+            }
+            indexingStatsBody.innerHTML = html;
+        } else {
+            indexingStatsSection.style.display = 'none';
+            indexingStatsBody.innerHTML = '';
+        }
+    }
 }
 
 // ============================================
@@ -474,6 +499,16 @@ function showToast(message, type = 'info') {
         toast.style.transform = 'translateX(100%)';
         setTimeout(() => toast.remove(), 300);
     }, 4000);
+}
+
+// ============================================
+// Utility Functions
+// ============================================
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
 }
 
 // ============================================

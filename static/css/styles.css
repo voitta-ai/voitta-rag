@@ -918,6 +918,55 @@ a:hover {
 }
 
 /* ============================================
+   Indexing Stats Table
+   ============================================ */
+.stats-table-container {
+    overflow-x: auto;
+}
+
+.stats-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-sm);
+}
+
+.stats-table th {
+    text-align: left;
+    padding: var(--spacing-sm) var(--spacing-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+    border-bottom: 1px solid var(--color-border-light);
+    font-size: var(--font-size-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.stats-table th:not(:first-child) {
+    text-align: right;
+}
+
+.stats-table td {
+    padding: var(--spacing-sm) var(--spacing-sm);
+    border-bottom: 1px solid var(--color-border-light);
+    color: var(--color-text-primary);
+}
+
+.stats-table tr:last-child td {
+    border-bottom: none;
+}
+
+.stats-table .stats-ext {
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+}
+
+.stats-table .stats-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ============================================
    Utilities
    ============================================ */
 .sr-only {
