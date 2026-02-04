@@ -149,6 +149,15 @@
                     <span class="toggle-label">Enable for indexing</span>
                 </label>
 
+                <label class="toggle-setting">
+                    <input type="checkbox"
+                           id="folder-search-active"
+                           {% if folder_search_active %}checked{% endif %}
+                           onchange="toggleSearchActive(this.checked)">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Active for search</span>
+                </label>
+
                 <div class="index-status-display">
                     <span class="index-status-label">Index Status:</span>
                     <span class="index-status-value status-{{ current_index_status or 'none' }}" id="index-status-value">
