@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -57,8 +57,8 @@ def _get_current_user_name() -> str:
 
 
 def _get_or_create_user(db: Session, user_name: str) -> User:
-    """Get existing user or create a new one."""
-    result = db.execute(select(User).where(User.name == user_name))
+    """Get existing user or create a new one (case-insensitive match)."""
+    result = db.execute(select(User).where(func.lower(User.name) == user_name.lower()))
     user = result.scalar_one_or_none()
     if not user:
         user = User(name=user_name)
