@@ -13,7 +13,7 @@ from starlette.requests import Request
 
 from .config import get_settings
 from .db.database import get_sync_engine
-from .db.models import FileMetadata, FolderIndexStatus, IndexedFile
+from .db.models import FileMetadata, FolderIndexStatus, IndexedFile, User, UserFolderSetting
 from .services.embedding import get_embedding_service
 from .services.parsers import parse_file
 from .services.vector_store import get_vector_store
@@ -40,6 +40,43 @@ class UserHeaderMiddleware(BaseHTTPMiddleware):
             current_user.set(None)
         response = await call_next(request)
         return response
+
+
+class AuthError(Exception):
+    """Raised when user is not authorized."""
+
+    pass
+
+
+def _get_current_user_name() -> str:
+    """Get the current user name from context, or raise AuthError."""
+    user_name = current_user.get()
+    if not user_name:
+        raise AuthError("Not authorized: X-User-Name header required")
+    return user_name
+
+
+def _get_or_create_user(db: Session, user_name: str) -> User:
+    """Get existing user or create a new one."""
+    result = db.execute(select(User).where(User.name == user_name))
+    user = result.scalar_one_or_none()
+    if not user:
+        user = User(name=user_name)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    return user
+
+
+def _get_user_active_folders(db: Session, user_id: int) -> list[str]:
+    """Get list of folder paths that are active for the user."""
+    result = db.execute(
+        select(UserFolderSetting.folder_path).where(
+            UserFolderSetting.user_id == user_id,
+            UserFolderSetting.enabled == True,  # noqa: E712
+        )
+    )
+    return [row[0] for row in result.fetchall()]
 
 
 class SearchResult(BaseModel):
@@ -110,7 +147,13 @@ def search(
 
     Returns:
         List of matching document chunks with metadata and similarity scores
+
+    Raises:
+        AuthError: If X-User-Name header is not provided
     """
+    # Require authentication
+    user_name = _get_current_user_name()
+
     settings = get_settings()
     if limit is None:
         limit = settings.mcp_search_limit
@@ -118,8 +161,18 @@ def search(
     vector_store = get_vector_store()
     engine = get_sync_engine()
 
-    # Get disabled folders to exclude from search (by index_folder)
     with Session(engine) as db:
+        # Get or create user
+        user = _get_or_create_user(db, user_name)
+
+        # Get user's active folders
+        user_active_folders = _get_user_active_folders(db, user.id)
+
+        # If no active folders, return empty results
+        if not user_active_folders:
+            return []
+
+        # Get disabled folders to exclude from search (by index_folder)
         result = db.execute(
             select(FolderIndexStatus.folder_path).where(FolderIndexStatus.status == "disabled")
         )
@@ -128,11 +181,20 @@ def search(
     # Generate query embedding
     query_embedding = embedding_service.embed_query(query)
 
+    # Combine user's active folders with any explicit include_folders filter
+    # If include_folders is specified, intersect with user's active folders
+    effective_include_folders = user_active_folders
+    if include_folders:
+        # Only include folders that are both in user's active list AND in the requested list
+        effective_include_folders = [f for f in include_folders if f in user_active_folders]
+        if not effective_include_folders:
+            return []  # No overlap between requested and active folders
+
     # Search vector store (excluding disabled index_folders)
     chunks = vector_store.search(
         query_embedding=query_embedding,
         limit=limit,
-        include_folders=include_folders,
+        include_folders=effective_include_folders,
         exclude_folders=exclude_folders,
         exclude_index_folders=disabled_index_folders if disabled_index_folders else None,
     )
@@ -397,6 +459,145 @@ def get_chunk_range(
         truncated_beyond_file=truncated_beyond_file,
         error=None,
     )
+
+
+class FolderActiveState(BaseModel):
+    """Active state of a folder for a user."""
+
+    folder_path: str = Field(description="Path to the folder")
+    is_active: bool = Field(description="Whether the folder is active for search")
+
+
+class SetFolderActiveResult(BaseModel):
+    """Result of setting folder active state."""
+
+    success: bool = Field(description="Whether the operation succeeded")
+    folder_path: str = Field(description="Path to the folder")
+    is_active: bool = Field(description="New active state")
+    subfolders_updated: int = Field(description="Number of subfolders also updated")
+    error: str | None = Field(description="Error message if success is False")
+
+
+@mcp.tool()
+def set_folder_active(
+    folder_path: str,
+    is_active: bool,
+) -> SetFolderActiveResult:
+    """Set a folder's active state for search. Also updates all subfolders to the same state.
+
+    Args:
+        folder_path: Path to the folder
+        is_active: Whether to activate (True) or deactivate (False) the folder
+
+    Returns:
+        Result with number of subfolders updated
+
+    Raises:
+        AuthError: If X-User-Name header is not provided
+    """
+    user_name = _get_current_user_name()
+    engine = get_sync_engine()
+
+    with Session(engine) as db:
+        # Get or create user
+        user = _get_or_create_user(db, user_name)
+
+        # Get all indexed folders to find subfolders
+        result = db.execute(select(FolderIndexStatus.folder_path))
+        all_folders = [row[0] for row in result.fetchall()]
+
+        # Find the target folder and all its subfolders
+        folders_to_update = []
+        folder_path_normalized = folder_path.rstrip("/")
+
+        for f in all_folders:
+            f_normalized = f.rstrip("/")
+            # Match exact folder or subfolders (folders that start with folder_path/)
+            if f_normalized == folder_path_normalized or f_normalized.startswith(folder_path_normalized + "/"):
+                folders_to_update.append(f)
+
+        if not folders_to_update:
+            return SetFolderActiveResult(
+                success=False,
+                folder_path=folder_path,
+                is_active=is_active,
+                subfolders_updated=0,
+                error=f"Folder not found: {folder_path}",
+            )
+
+        # Update or create settings for all folders
+        subfolders_updated = 0
+        for f in folders_to_update:
+            result = db.execute(
+                select(UserFolderSetting).where(
+                    UserFolderSetting.user_id == user.id,
+                    UserFolderSetting.folder_path == f,
+                )
+            )
+            setting = result.scalar_one_or_none()
+
+            if setting:
+                setting.enabled = is_active
+            else:
+                setting = UserFolderSetting(
+                    user_id=user.id,
+                    folder_path=f,
+                    enabled=is_active,
+                )
+                db.add(setting)
+
+            if f != folder_path:
+                subfolders_updated += 1
+
+        db.commit()
+
+        return SetFolderActiveResult(
+            success=True,
+            folder_path=folder_path,
+            is_active=is_active,
+            subfolders_updated=subfolders_updated,
+            error=None,
+        )
+
+
+@mcp.tool()
+def get_folder_active_states() -> list[FolderActiveState]:
+    """Get the active states of all indexed folders for the current user.
+
+    Returns:
+        List of folders with their active states
+
+    Raises:
+        AuthError: If X-User-Name header is not provided
+    """
+    user_name = _get_current_user_name()
+    engine = get_sync_engine()
+
+    with Session(engine) as db:
+        # Get or create user
+        user = _get_or_create_user(db, user_name)
+
+        # Get all indexed folders
+        result = db.execute(select(FolderIndexStatus.folder_path))
+        all_folders = [row[0] for row in result.fetchall()]
+
+        # Get user's folder settings
+        result = db.execute(
+            select(UserFolderSetting).where(UserFolderSetting.user_id == user.id)
+        )
+        user_settings = {s.folder_path: s.enabled for s in result.scalars().all()}
+
+        # Build results with default=False for folders without settings
+        results = []
+        for folder in all_folders:
+            results.append(
+                FolderActiveState(
+                    folder_path=folder,
+                    is_active=user_settings.get(folder, False),
+                )
+            )
+
+        return results
 
 
 def _merge_chunks_with_overlap(chunks: list, chunk_overlap: int) -> str:
