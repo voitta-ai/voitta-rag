@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 
 from ..deps import DB, CurrentUser, Filesystem, Metadata, OptionalUser
 from ...db.models import FolderIndexStatus, IndexedFile, User, UserFolderSetting
+from ...services.vector_store import get_vector_store
 
 router = APIRouter()
 
@@ -117,10 +118,9 @@ async def browse(
         for status in result.scalars().all():
             index_statuses[status.folder_path] = status.status
 
-        # Get folder statistics: indexed files count and total chunks per folder
-        # Query all indexed files and filter by path prefix for each folder
-        result = await db.execute(select(IndexedFile))
-        all_indexed_files = result.scalars().all()
+        # Get folder statistics from Qdrant (real-time chunk counts)
+        vector_store = get_vector_store()
+        qdrant_file_counts = vector_store.get_file_chunk_counts()
 
         # Calculate stats for each folder by checking file path prefix
         for folder_path in folder_paths:
@@ -128,13 +128,13 @@ async def browse(
             indexed_count = 0
             total_chunks = 0
 
-            for indexed_file in all_indexed_files:
+            for file_path, chunk_count in qdrant_file_counts.items():
                 # Check if file is inside this folder (starts with folder path)
-                if indexed_file.file_path.startswith(prefix) or (
-                    not prefix and "/" not in indexed_file.file_path
+                if file_path.startswith(prefix) or (
+                    not prefix and "/" not in file_path
                 ):
                     indexed_count += 1
-                    total_chunks += indexed_file.chunk_count or 0
+                    total_chunks += chunk_count
 
             # Count total files in folder from filesystem
             try:
@@ -148,19 +148,19 @@ async def browse(
                 "total_chunks": total_chunks,
             }
 
-    # Get index status for all files in the listing (from IndexedFile table)
+    # Get index status for all files in the listing (from Qdrant for real-time counts)
     file_paths = [item.path for item in items if not item.is_dir]
     file_index_statuses = {}
     if file_paths:
-        result = await db.execute(
-            select(IndexedFile).where(IndexedFile.file_path.in_(file_paths))
-        )
-        for indexed_file in result.scalars().all():
-            file_index_statuses[indexed_file.file_path] = {
-                "status": "indexed",
-                "chunk_count": indexed_file.chunk_count,
-                "indexed_at": indexed_file.indexed_at.isoformat() if indexed_file.indexed_at else None,
-            }
+        vector_store = get_vector_store()
+        for file_path in file_paths:
+            chunk_count = vector_store.count_by_file(file_path)
+            if chunk_count > 0:
+                file_index_statuses[file_path] = {
+                    "status": "indexed",
+                    "chunk_count": chunk_count,
+                    "indexed_at": None,  # Not available from Qdrant directly
+                }
 
     # Also get current folder's index status
     current_index_status = None

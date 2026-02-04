@@ -27,6 +27,10 @@ class ChunkMetadata:
     start_char: int
     end_char: int
     indexed_at: str  # ISO format
+    # PDF-specific fields (None for non-PDF files)
+    start_page: int | None = None  # First page this chunk came from
+    end_page: int | None = None  # Last page this chunk came from
+    source_page_count: int | None = None  # Total pages in source PDF
 
 
 @dataclass
@@ -94,11 +98,13 @@ class VectorStoreService:
     def store_chunks(
         self,
         chunks: list[tuple[str, list[float], ChunkMetadata]],
+        batch_size: int = 100,
     ) -> list[str]:
         """Store multiple chunks with their embeddings.
 
         Args:
             chunks: List of (text, embedding, metadata) tuples
+            batch_size: Number of chunks per batch to avoid payload limits
 
         Returns:
             List of generated point IDs
@@ -113,26 +119,39 @@ class VectorStoreService:
             point_id = str(uuid.uuid4())
             ids.append(point_id)
 
+            payload = {
+                "text": text,
+                "file_path": metadata.file_path,
+                "folder_path": metadata.folder_path,
+                "index_folder": metadata.index_folder,
+                "file_name": metadata.file_name,
+                "chunk_index": metadata.chunk_index,
+                "total_chunks": metadata.total_chunks,
+                "start_char": metadata.start_char,
+                "end_char": metadata.end_char,
+                "indexed_at": metadata.indexed_at,
+            }
+            # Add PDF-specific fields if present
+            if metadata.start_page is not None:
+                payload["start_page"] = metadata.start_page
+            if metadata.end_page is not None:
+                payload["end_page"] = metadata.end_page
+            if metadata.source_page_count is not None:
+                payload["source_page_count"] = metadata.source_page_count
+
             points.append(
                 qmodels.PointStruct(
                     id=point_id,
                     vector=embedding,
-                    payload={
-                        "text": text,
-                        "file_path": metadata.file_path,
-                        "folder_path": metadata.folder_path,
-                        "index_folder": metadata.index_folder,
-                        "file_name": metadata.file_name,
-                        "chunk_index": metadata.chunk_index,
-                        "total_chunks": metadata.total_chunks,
-                        "start_char": metadata.start_char,
-                        "end_char": metadata.end_char,
-                        "indexed_at": metadata.indexed_at,
-                    },
+                    payload=payload,
                 )
             )
 
-        self.client.upsert(collection_name=self.collection_name, points=points)
+        # Store in batches to avoid Qdrant payload size limits
+        for i in range(0, len(points), batch_size):
+            batch = points[i : i + batch_size]
+            self.client.upsert(collection_name=self.collection_name, points=batch)
+
         logger.info(f"Stored {len(points)} chunks in Qdrant")
 
         return ids
@@ -349,6 +368,9 @@ class VectorStoreService:
                         start_char=payload["start_char"],
                         end_char=payload["end_char"],
                         indexed_at=payload["indexed_at"],
+                        start_page=payload.get("start_page"),
+                        end_page=payload.get("end_page"),
+                        source_page_count=payload.get("source_page_count"),
                     ),
                     score=result.score,
                 )
@@ -368,6 +390,92 @@ class VectorStoreService:
             }
         except Exception as e:
             return {"error": str(e)}
+
+    def count_by_file(self, file_path: str) -> int:
+        """Count chunks for a specific file."""
+        try:
+            result = self.client.count(
+                collection_name=self.collection_name,
+                count_filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="file_path",
+                            match=qmodels.MatchValue(value=file_path),
+                        )
+                    ]
+                ),
+            )
+            return result.count
+        except Exception:
+            return 0
+
+    def get_stored_page_count(self, file_path: str) -> int | None:
+        """Get the stored source_page_count for a PDF file.
+
+        Returns None if no chunks exist or page count not stored.
+        """
+        try:
+            # Get just one chunk to check the source_page_count
+            results, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=1,
+                scroll_filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="file_path",
+                            match=qmodels.MatchValue(value=file_path),
+                        )
+                    ]
+                ),
+                with_payload=["source_page_count"],
+                with_vectors=False,
+            )
+
+            if results and results[0].payload.get("source_page_count"):
+                return results[0].payload["source_page_count"]
+            return None
+        except Exception as e:
+            logger.error(f"Error getting stored page count for {file_path}: {e}")
+            return None
+
+    def get_file_chunk_counts(self, folder_prefix: str = "") -> dict[str, int]:
+        """Get chunk counts for all files, optionally filtered by folder prefix.
+
+        Args:
+            folder_prefix: If provided, only return files whose file_path starts with this prefix
+
+        Returns:
+            Dict mapping file_path to chunk count
+        """
+        try:
+            # Scroll through all points to get unique file paths with counts
+            # This is more efficient than counting each file individually
+            file_counts: dict[str, int] = {}
+
+            # Use scroll to iterate through all points
+            offset = None
+            while True:
+                results, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=["file_path"],
+                    with_vectors=False,
+                )
+
+                for point in results:
+                    file_path = point.payload.get("file_path", "")
+                    if folder_prefix and not file_path.startswith(folder_prefix):
+                        continue
+                    file_counts[file_path] = file_counts.get(file_path, 0) + 1
+
+                if offset is None:
+                    break
+
+            return file_counts
+        except Exception as e:
+            logger.error(f"Error getting file chunk counts: {e}")
+            return {}
 
 
 # Global singleton instance

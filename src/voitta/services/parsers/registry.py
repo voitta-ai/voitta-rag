@@ -4,7 +4,10 @@ from pathlib import Path
 
 from .base import BaseParser, ParserResult
 from .docx_parser import DocxParser
+from .epub_parser import EpubParser
+from .pdf_parser import PdfParser
 from .pptx_parser import PptxParser
+from .text_parser import TextParser
 from .xlsx_parser import XlsxParser
 from .odf_parser import OdpParser, OdtParser, OdsParser
 
@@ -65,7 +68,10 @@ def get_registry() -> ParserRegistry:
         _default_registry = ParserRegistry()
         # Register all parsers
         _default_registry.register(DocxParser())
+        _default_registry.register(EpubParser())
+        _default_registry.register(PdfParser())
         _default_registry.register(PptxParser())
+        _default_registry.register(TextParser())
         _default_registry.register(XlsxParser())
         _default_registry.register(OdpParser())
         _default_registry.register(OdtParser())
