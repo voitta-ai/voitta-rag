@@ -59,7 +59,8 @@ class UserFolderSetting(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
     folder_path: Mapped[str] = mapped_column(String(1000), nullable=False, index=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)  # For indexing
+    search_active: Mapped[bool] = mapped_column(Boolean, default=False)  # For MCP search
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # Unique constraint

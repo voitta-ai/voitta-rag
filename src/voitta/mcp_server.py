@@ -69,11 +69,11 @@ def _get_or_create_user(db: Session, user_name: str) -> User:
 
 
 def _get_user_active_folders(db: Session, user_id: int) -> list[str]:
-    """Get list of folder paths that are active for the user."""
+    """Get list of folder paths that are active for search for the user."""
     result = db.execute(
         select(UserFolderSetting.folder_path).where(
             UserFolderSetting.user_id == user_id,
-            UserFolderSetting.enabled == True,  # noqa: E712
+            UserFolderSetting.search_active == True,  # noqa: E712
         )
     )
     return [row[0] for row in result.fetchall()]
@@ -537,12 +537,13 @@ def set_folder_active(
             setting = result.scalar_one_or_none()
 
             if setting:
-                setting.enabled = is_active
+                setting.search_active = is_active
             else:
                 setting = UserFolderSetting(
                     user_id=user.id,
                     folder_path=f,
-                    enabled=is_active,
+                    enabled=False,  # Don't auto-enable indexing
+                    search_active=is_active,
                 )
                 db.add(setting)
 
@@ -585,7 +586,7 @@ def get_folder_active_states() -> list[FolderActiveState]:
         result = db.execute(
             select(UserFolderSetting).where(UserFolderSetting.user_id == user.id)
         )
-        user_settings = {s.folder_path: s.enabled for s in result.scalars().all()}
+        user_settings = {s.folder_path: s.search_active for s in result.scalars().all()}
 
         # Build results with default=False for folders without settings
         results = []

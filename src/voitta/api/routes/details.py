@@ -34,6 +34,7 @@ class ItemDetailsResponse(BaseModel):
     metadata_updated_by: str | None = None
     # Folder-specific (only if is_dir)
     folder_enabled: bool | None = None
+    search_active: bool | None = None  # For MCP search filtering
     index_status: str | None = None
     file_type_stats: list[FileTypeStat] | None = None
     # File-specific index info (only if not is_dir)
@@ -64,6 +65,7 @@ async def get_item_details(
 
     # Get folder-specific data
     folder_enabled = None
+    search_active = None
     index_status = None
     chunk_count = None
     indexed_at = None
@@ -80,6 +82,7 @@ async def get_item_details(
         )
         setting = result.scalar_one_or_none()
         folder_enabled = setting.enabled if setting else False
+        search_active = setting.search_active if setting else False
 
         # Get index status
         result = await db.execute(
@@ -107,6 +110,7 @@ async def get_item_details(
         metadata_text=metadata_text,
         metadata_updated_by=metadata_updated_by,
         folder_enabled=folder_enabled,
+        search_active=search_active,
         index_status=index_status,
         file_type_stats=file_type_stats,
         chunk_count=chunk_count,

@@ -259,6 +259,12 @@ function updateSidebar(details) {
                 folderEnabledCheckbox.checked = details.folder_enabled || false;
             }
 
+            // Update search active toggle
+            const searchActiveCheckbox = document.getElementById('folder-search-active');
+            if (searchActiveCheckbox) {
+                searchActiveCheckbox.checked = details.search_active || false;
+            }
+
             // Update index status
             const statusValue = document.getElementById('index-status-value');
             if (statusValue) {
@@ -430,6 +436,37 @@ async function toggleFolderEnabled(enabled) {
         showToast(error.message, 'error');
         // Revert checkbox
         document.getElementById('folder-enabled').checked = !enabled;
+    }
+}
+
+async function toggleSearchActive(active) {
+    // Use selected path or fall back to current path
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) {
+        showToast('No folder selected', 'error');
+        document.getElementById('folder-search-active').checked = !active;
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/settings/folders/${encodeURIComponent(targetPath)}/search-active`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ search_active: active }),
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to update setting');
+        }
+
+        showToast(active ? 'Folder activated for search' : 'Folder deactivated for search', 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+        // Revert checkbox
+        document.getElementById('folder-search-active').checked = !active;
     }
 }
 
