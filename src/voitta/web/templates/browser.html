@@ -46,68 +46,91 @@
     <div class="browser-layout">
         <!-- File List -->
         <div class="file-list-container">
+            <!-- Column Headers -->
+            <div class="file-list-header">
+                <div class="col-name">Name</div>
+                <div class="col-search">Search</div>
+                <div class="col-size">Size</div>
+                <div class="col-status">Index</div>
+            </div>
             <div class="file-list" id="file-list">
                 {% if items %}
                 {% for item in items %}
                 {% set item_index_status = index_statuses.get(item.path, 'none') if item.is_dir else (file_index_statuses.get(item.path, {}).get('status', 'none')) %}
                 {% set file_chunk_count = file_index_statuses.get(item.path, {}).get('chunk_count', 0) if not item.is_dir else 0 %}
                 {% set stats = folder_stats.get(item.path, {}) if item.is_dir else {} %}
+                {% set item_search_active = folder_search_states.get(item.path, false) if item.is_dir else false %}
                 <div class="file-item {% if item.is_dir %}folder{% else %}file{% endif %}"
                      data-path="{{ item.path }}"
                      data-index-status="{{ item_index_status }}"
+                     data-search-active="{{ 'true' if item_search_active else 'false' }}"
                      onclick="selectItem(this, '{{ item.path }}', {{ 'true' if item.is_dir else 'false' }})">
-                    {% if item.is_dir %}
-                    <svg viewBox="0 0 24 24" fill="currentColor" class="file-icon folder-icon">
-                        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-                    </svg>
-                    {% else %}
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="file-icon">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                        <polyline points="14 2 14 8 20 8"></polyline>
-                    </svg>
-                    {% endif %}
-                    <span class="file-name">{{ item.name }}</span>
-                    <span class="file-size">{{ item.size | filesizeformat }}</span>
-                    <span class="index-status-tag status-{{ item_index_status or 'none' }}" title="{% if item.is_dir and stats %}{{ stats.get('indexed_files', 0) }}/{{ stats.get('total_files', 0) }} files, {{ stats.get('total_chunks', 0) }} chunks{% elif file_chunk_count %}{{ file_chunk_count }} chunks{% else %}{{ item_index_status or 'none' }}{% endif %}">
+                    <div class="col-name">
                         {% if item.is_dir %}
-                            {% if item_index_status == 'indexed' or item_index_status == 'disabled' %}
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm">
-                                <polyline points="20 6 9 17 4 12"></polyline>
-                            </svg>
-                            {% elif item_index_status == 'indexing' %}
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm spin">
-                                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
-                            </svg>
-                            {% elif item_index_status == 'pending' %}
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <polyline points="12 6 12 12 16 14"></polyline>
-                            </svg>
-                            {% elif item_index_status == 'error' %}
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm">
-                                <circle cx="12" cy="12" r="10"></circle>
-                                <line x1="15" y1="9" x2="9" y2="15"></line>
-                                <line x1="9" y1="9" x2="15" y2="15"></line>
-                            </svg>
-                            {% endif %}
-                            {% if stats and (stats.get('indexed_files', 0) > 0 or stats.get('total_files', 0) > 0) %}
-                            <span class="folder-stats">{{ stats.get('indexed_files', 0) }}/{{ stats.get('total_files', 0) }}{% if stats.get('total_chunks', 0) > 0 %} · {{ stats.get('total_chunks', 0) }}{% endif %}</span>
-                            {% elif item_index_status != 'none' %}
-                            {{ item_index_status|capitalize }}
-                            {% else %}
-                            —
-                            {% endif %}
+                        <svg viewBox="0 0 24 24" fill="currentColor" class="file-icon folder-icon">
+                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+                        </svg>
                         {% else %}
-                            {% if item_index_status == 'indexed' %}
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm">
-                                <polyline points="20 6 9 17 4 12"></polyline>
-                            </svg>
-                            {{ file_chunk_count }}
-                            {% else %}
-                            —
-                            {% endif %}
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="file-icon">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                        </svg>
                         {% endif %}
-                    </span>
+                        <span class="file-name-text">{{ item.name }}</span>
+                    </div>
+                    <div class="col-search">
+                        {% if item.is_dir %}
+                        <label class="inline-toggle" onclick="event.stopPropagation()">
+                            <input type="checkbox"
+                                   {% if item_search_active %}checked{% endif %}
+                                   onchange="toggleSearchActiveInline(this, '{{ item.path }}')">
+                            <span class="inline-toggle-slider"></span>
+                        </label>
+                        {% endif %}
+                    </div>
+                    <div class="col-size">{{ item.size | filesizeformat }}</div>
+                    <div class="col-status">
+                        <span class="index-status-tag status-{{ item_index_status or 'none' }}" title="{% if item.is_dir and stats %}{{ stats.get('indexed_files', 0) }}/{{ stats.get('total_files', 0) }} files, {{ stats.get('total_chunks', 0) }} chunks{% elif file_chunk_count %}{{ file_chunk_count }} chunks{% else %}{{ item_index_status or 'none' }}{% endif %}">
+                            {% if item.is_dir %}
+                                {% if item_index_status == 'indexed' or item_index_status == 'disabled' %}
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                {% elif item_index_status == 'indexing' %}
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm spin">
+                                    <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"></path>
+                                </svg>
+                                {% elif item_index_status == 'pending' %}
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <polyline points="12 6 12 12 16 14"></polyline>
+                                </svg>
+                                {% elif item_index_status == 'error' %}
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm">
+                                    <circle cx="12" cy="12" r="10"></circle>
+                                    <line x1="15" y1="9" x2="9" y2="15"></line>
+                                    <line x1="9" y1="9" x2="15" y2="15"></line>
+                                </svg>
+                                {% endif %}
+                                {% if stats and (stats.get('indexed_files', 0) > 0 or stats.get('total_files', 0) > 0) %}
+                                <span class="folder-stats">{{ stats.get('indexed_files', 0) }}/{{ stats.get('total_files', 0) }}{% if stats.get('total_chunks', 0) > 0 %} · {{ stats.get('total_chunks', 0) }}{% endif %}</span>
+                                {% elif item_index_status != 'none' %}
+                                {{ item_index_status|capitalize }}
+                                {% else %}
+                                —
+                                {% endif %}
+                            {% else %}
+                                {% if item_index_status == 'indexed' %}
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                                {{ file_chunk_count }}
+                                {% else %}
+                                —
+                                {% endif %}
+                            {% endif %}
+                        </span>
+                    </div>
                 </div>
                 {% endfor %}
                 {% else %}
@@ -147,15 +170,6 @@
                            onchange="toggleFolderEnabled(this.checked)">
                     <span class="toggle-slider"></span>
                     <span class="toggle-label">Enable for indexing</span>
-                </label>
-
-                <label class="toggle-setting">
-                    <input type="checkbox"
-                           id="folder-search-active"
-                           {% if folder_search_active %}checked{% endif %}
-                           onchange="toggleSearchActive(this.checked)">
-                    <span class="toggle-slider"></span>
-                    <span class="toggle-label">Active for search</span>
                 </label>
 
                 <div class="index-status-display">

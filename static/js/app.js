@@ -259,12 +259,6 @@ function updateSidebar(details) {
                 folderEnabledCheckbox.checked = details.folder_enabled || false;
             }
 
-            // Update search active toggle
-            const searchActiveCheckbox = document.getElementById('folder-search-active');
-            if (searchActiveCheckbox) {
-                searchActiveCheckbox.checked = details.search_active || false;
-            }
-
             // Update index status
             const statusValue = document.getElementById('index-status-value');
             if (statusValue) {
@@ -467,6 +461,37 @@ async function toggleSearchActive(active) {
         showToast(error.message, 'error');
         // Revert checkbox
         document.getElementById('folder-search-active').checked = !active;
+    }
+}
+
+async function toggleSearchActiveInline(checkbox, folderPath) {
+    const active = checkbox.checked;
+    const fileItem = checkbox.closest('.file-item');
+
+    try {
+        const response = await fetch(`/api/settings/folders/${encodeURIComponent(folderPath)}/search-active`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ search_active: active }),
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to update setting');
+        }
+
+        // Update data attribute
+        if (fileItem) {
+            fileItem.dataset.searchActive = active ? 'true' : 'false';
+        }
+
+        showToast(active ? 'Folder activated for search' : 'Folder deactivated for search', 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+        // Revert checkbox
+        checkbox.checked = !active;
     }
 }
 
