@@ -438,6 +438,83 @@ class VectorStoreService:
             logger.error(f"Error getting stored page count for {file_path}: {e}")
             return None
 
+    def get_chunks_by_range(
+        self,
+        file_path: str,
+        first_chunk: int,
+        last_chunk: int,
+    ) -> list[StoredChunk]:
+        """Get chunks for a file within a specified index range.
+
+        Args:
+            file_path: Path to the file
+            first_chunk: First chunk index (inclusive, 0-based)
+            last_chunk: Last chunk index (inclusive)
+
+        Returns:
+            List of chunks sorted by chunk_index
+        """
+        try:
+            # Scroll through chunks for this file
+            chunks = []
+            offset = None
+
+            while True:
+                results, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    limit=100,
+                    offset=offset,
+                    scroll_filter=qmodels.Filter(
+                        must=[
+                            qmodels.FieldCondition(
+                                key="file_path",
+                                match=qmodels.MatchValue(value=file_path),
+                            )
+                        ]
+                    ),
+                    with_payload=True,
+                    with_vectors=False,
+                )
+
+                for point in results:
+                    payload = point.payload
+                    chunk_index = payload["chunk_index"]
+
+                    # Filter by chunk range
+                    if first_chunk <= chunk_index <= last_chunk:
+                        chunks.append(
+                            StoredChunk(
+                                id=str(point.id),
+                                text=payload["text"],
+                                metadata=ChunkMetadata(
+                                    file_path=payload["file_path"],
+                                    folder_path=payload["folder_path"],
+                                    index_folder=payload.get("index_folder", payload["folder_path"]),
+                                    file_name=payload["file_name"],
+                                    chunk_index=payload["chunk_index"],
+                                    total_chunks=payload["total_chunks"],
+                                    start_char=payload["start_char"],
+                                    end_char=payload["end_char"],
+                                    indexed_at=payload["indexed_at"],
+                                    start_page=payload.get("start_page"),
+                                    end_page=payload.get("end_page"),
+                                    source_page_count=payload.get("source_page_count"),
+                                ),
+                                score=None,
+                            )
+                        )
+
+                if offset is None:
+                    break
+
+            # Sort by chunk_index
+            chunks.sort(key=lambda c: c.metadata.chunk_index)
+            return chunks
+
+        except Exception as e:
+            logger.error(f"Error getting chunks by range for {file_path}: {e}")
+            return []
+
     def get_file_chunk_counts(self, folder_prefix: str = "") -> dict[str, int]:
         """Get chunk counts for all files, optionally filtered by folder prefix.
 
