@@ -76,6 +76,23 @@ class FileContent(BaseModel):
     metadata: str | None = Field(description="User-added metadata/notes for the file")
 
 
+class ChunkRangeResult(BaseModel):
+    """Result of getting a chunk range."""
+
+    success: bool = Field(description="Whether the operation succeeded")
+    file_path: str = Field(description="Path to the file")
+    merged_text: str = Field(description="Merged text content with overlaps removed")
+    first_chunk: int = Field(description="First chunk index requested")
+    last_chunk: int = Field(description="Last chunk index requested")
+    actual_first_chunk: int = Field(description="Actual first chunk index returned")
+    actual_last_chunk: int = Field(description="Actual last chunk index returned")
+    total_chunks_in_file: int = Field(description="Total number of chunks in the file")
+    chunks_returned: int = Field(description="Number of chunks included in result")
+    truncated_to_limit: bool = Field(description="True if result was truncated due to 20 chunk limit")
+    truncated_beyond_file: bool = Field(description="True if last_chunk exceeded file's chunk count")
+    error: str | None = Field(description="Error message if success is False")
+
+
 @mcp.tool()
 def search(
     query: str,
@@ -254,6 +271,165 @@ def get_file(file_path: str) -> FileContent:
         chunk_count=indexed_file.chunk_count,
         metadata=metadata_text,
     )
+
+
+@mcp.tool()
+def get_chunk_range(
+    file_path: str,
+    first_chunk: int,
+    last_chunk: int,
+) -> ChunkRangeResult:
+    """Get a range of chunks from an indexed file, merged with overlaps removed.
+
+    Args:
+        file_path: Path to the file (relative to root)
+        first_chunk: First chunk index (0-based, inclusive)
+        last_chunk: Last chunk index (inclusive)
+
+    Returns:
+        Merged text content with status metadata
+    """
+    MAX_CHUNKS = 20
+    settings = get_settings()
+    vector_store = get_vector_store()
+    chunk_overlap = settings.chunk_overlap
+
+    # Validate input
+    if first_chunk < 0:
+        return ChunkRangeResult(
+            success=False,
+            file_path=file_path,
+            merged_text="",
+            first_chunk=first_chunk,
+            last_chunk=last_chunk,
+            actual_first_chunk=0,
+            actual_last_chunk=0,
+            total_chunks_in_file=0,
+            chunks_returned=0,
+            truncated_to_limit=False,
+            truncated_beyond_file=False,
+            error="first_chunk must be >= 0",
+        )
+
+    if last_chunk < first_chunk:
+        return ChunkRangeResult(
+            success=False,
+            file_path=file_path,
+            merged_text="",
+            first_chunk=first_chunk,
+            last_chunk=last_chunk,
+            actual_first_chunk=0,
+            actual_last_chunk=0,
+            total_chunks_in_file=0,
+            chunks_returned=0,
+            truncated_to_limit=False,
+            truncated_beyond_file=False,
+            error="last_chunk must be >= first_chunk",
+        )
+
+    # Apply chunk limit
+    truncated_to_limit = False
+    effective_last_chunk = last_chunk
+    if (last_chunk - first_chunk + 1) > MAX_CHUNKS:
+        effective_last_chunk = first_chunk + MAX_CHUNKS - 1
+        truncated_to_limit = True
+
+    # Get chunks from vector store
+    chunks = vector_store.get_chunks_by_range(file_path, first_chunk, effective_last_chunk)
+
+    if not chunks:
+        # Check if file exists at all
+        total_chunks = vector_store.count_by_file(file_path)
+        if total_chunks == 0:
+            return ChunkRangeResult(
+                success=False,
+                file_path=file_path,
+                merged_text="",
+                first_chunk=first_chunk,
+                last_chunk=last_chunk,
+                actual_first_chunk=0,
+                actual_last_chunk=0,
+                total_chunks_in_file=0,
+                chunks_returned=0,
+                truncated_to_limit=truncated_to_limit,
+                truncated_beyond_file=False,
+                error=f"File not found or not indexed: {file_path}",
+            )
+        else:
+            # File exists but requested range is beyond file size
+            return ChunkRangeResult(
+                success=False,
+                file_path=file_path,
+                merged_text="",
+                first_chunk=first_chunk,
+                last_chunk=last_chunk,
+                actual_first_chunk=0,
+                actual_last_chunk=0,
+                total_chunks_in_file=total_chunks,
+                chunks_returned=0,
+                truncated_to_limit=truncated_to_limit,
+                truncated_beyond_file=True,
+                error=f"Requested chunk range {first_chunk}-{last_chunk} is beyond file size ({total_chunks} chunks, indices 0-{total_chunks - 1})",
+            )
+
+    # Get total chunks in file from first chunk's metadata
+    total_chunks_in_file = chunks[0].metadata.total_chunks
+
+    # Check if we got fewer chunks than requested (beyond file boundary)
+    actual_first_chunk = chunks[0].metadata.chunk_index
+    actual_last_chunk = chunks[-1].metadata.chunk_index
+    truncated_beyond_file = actual_last_chunk < effective_last_chunk
+
+    # Merge chunks with overlap removal
+    merged_text = _merge_chunks_with_overlap(chunks, chunk_overlap)
+
+    return ChunkRangeResult(
+        success=True,
+        file_path=file_path,
+        merged_text=merged_text,
+        first_chunk=first_chunk,
+        last_chunk=last_chunk,
+        actual_first_chunk=actual_first_chunk,
+        actual_last_chunk=actual_last_chunk,
+        total_chunks_in_file=total_chunks_in_file,
+        chunks_returned=len(chunks),
+        truncated_to_limit=truncated_to_limit,
+        truncated_beyond_file=truncated_beyond_file,
+        error=None,
+    )
+
+
+def _merge_chunks_with_overlap(chunks: list, chunk_overlap: int) -> str:
+    """Merge consecutive chunks by removing overlapping text.
+
+    Args:
+        chunks: List of StoredChunk objects sorted by chunk_index
+        chunk_overlap: Number of characters that overlap between chunks
+
+    Returns:
+        Merged text with overlaps removed
+    """
+    if not chunks:
+        return ""
+
+    if len(chunks) == 1:
+        return chunks[0].text
+
+    # Start with first chunk's full text
+    merged = chunks[0].text
+
+    # For each subsequent chunk, remove the overlap from its beginning
+    for i in range(1, len(chunks)):
+        chunk_text = chunks[i].text
+
+        if chunk_overlap > 0 and len(chunk_text) > chunk_overlap:
+            # Remove overlap from the beginning of this chunk
+            merged += chunk_text[chunk_overlap:]
+        else:
+            # No overlap or chunk is too small
+            merged += chunk_text
+
+    return merged
 
 
 def run_server():
