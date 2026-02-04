@@ -71,8 +71,8 @@ class IndexingService:
     ) -> tuple[bool, int]:
         """Index a single file.
 
-        For PDFs, uses chunked processing - parses in chunks and stores
-        each chunk immediately for better progress feedback.
+        For PDFs, uses bucketed processing - parses in buckets (50-page splits)
+        and stores each bucket's text chunks immediately for better progress feedback.
 
         Args:
             file_path: Relative path to the file
@@ -158,11 +158,11 @@ class IndexingService:
         except Exception as e:
             idx_logger.exception(f"[INDEX] EXCEPTION deleting chunks: {e}")
 
-        # Check if this is a PDF for chunked processing
+        # Check if this is a PDF for bucketed processing
         is_pdf = abs_path.suffix.lower() == '.pdf'
 
         if is_pdf:
-            return self._index_pdf_chunked(
+            return self._index_pdf_bucketed(
                 abs_path, file_path, folder_path, index_folder,
                 file_hash, file_size, existing, db
             )
@@ -172,7 +172,7 @@ class IndexingService:
                 file_hash, file_size, existing, db
             )
 
-    def _index_pdf_chunked(
+    def _index_pdf_bucketed(
         self,
         abs_path: Path,
         file_path: str,
@@ -183,14 +183,14 @@ class IndexingService:
         existing,
         db: Session,
     ) -> tuple[bool, int]:
-        """Index a PDF using chunked processing - parse and store incrementally."""
-        idx_logger.info(f"[INDEX] Using CHUNKED PDF processing for: {file_path}")
+        """Index a PDF using bucketed processing - parse and store incrementally."""
+        idx_logger.info(f"[INDEX] Using BUCKETED PDF processing for: {file_path}")
 
         parser = PdfParser()
         file_name = abs_path.name
         indexed_at = datetime.now(timezone.utc).isoformat()
         total_chunks_stored = 0
-        chunk_offset = 0  # Track chunk numbering across PDF chunks
+        chunk_offset = 0  # Track chunk numbering across PDF buckets
 
         # Create/update SQLite record at START with negative chunk_count (in progress indicator)
         # Convention: negative = in progress, positive = complete
@@ -219,21 +219,21 @@ class IndexingService:
             db.rollback()
 
         try:
-            for parse_result in parser.parse_chunked(abs_path):
+            for parse_result in parser.parse_in_buckets(abs_path):
                 if not parse_result.success:
-                    idx_logger.error(f"[INDEX] Parse chunk FAILED: {parse_result.error}")
+                    idx_logger.error(f"[INDEX] Parse bucket FAILED: {parse_result.error}")
                     continue
 
                 if not parse_result.content.strip():
-                    idx_logger.warning(f"[INDEX] Empty content in chunk")
+                    idx_logger.warning(f"[INDEX] Empty content in bucket")
                     continue
 
-                chunk_meta = parse_result.metadata or {}
-                pdf_chunk_idx = chunk_meta.get('chunk_index', 0)
-                total_pdf_chunks = chunk_meta.get('total_chunks', 1)
+                bucket_meta = parse_result.metadata or {}
+                pdf_bucket_idx = bucket_meta.get('bucket_index', 0)
+                total_pdf_buckets = bucket_meta.get('total_buckets', 1)
 
                 idx_logger.info(
-                    f"[INDEX] Processing PDF chunk {pdf_chunk_idx + 1}/{total_pdf_chunks}: "
+                    f"[INDEX] Processing PDF bucket {pdf_bucket_idx + 1}/{total_pdf_buckets}: "
                     f"{len(parse_result.content)} chars"
                 )
 
@@ -245,7 +245,7 @@ class IndexingService:
                     continue
 
                 if not text_chunks:
-                    idx_logger.warning(f"[INDEX] No text chunks from PDF chunk {pdf_chunk_idx + 1}")
+                    idx_logger.warning(f"[INDEX] No text chunks from PDF bucket {pdf_bucket_idx + 1}")
                     continue
 
                 idx_logger.info(f"[INDEX] Generated {len(text_chunks)} text chunks")
@@ -258,10 +258,10 @@ class IndexingService:
                     idx_logger.exception(f"[INDEX] EXCEPTION embedding: {e}")
                     continue
 
-                # Extract page info from PDF chunk metadata
-                start_page = chunk_meta.get('start_page')
-                end_page = chunk_meta.get('end_page')
-                source_page_count = chunk_meta.get('source_page_count')
+                # Extract page info from PDF bucket metadata
+                start_page = bucket_meta.get('start_page')
+                end_page = bucket_meta.get('end_page')
+                source_page_count = bucket_meta.get('source_page_count')
 
                 # Prepare and store
                 chunk_data = []
@@ -295,7 +295,7 @@ class IndexingService:
 
                     idx_logger.info(
                         f"[INDEX] Stored {len(chunk_data)} chunks "
-                        f"(total: {total_chunks_stored}) for PDF chunk {pdf_chunk_idx + 1}"
+                        f"(total: {total_chunks_stored}) for PDF bucket {pdf_bucket_idx + 1}"
                     )
                 except Exception as e:
                     idx_logger.exception(f"[INDEX] EXCEPTION storing: {e}")
@@ -303,7 +303,7 @@ class IndexingService:
                     continue
 
         except Exception as e:
-            idx_logger.exception(f"[INDEX] EXCEPTION in chunked parsing: {e}")
+            idx_logger.exception(f"[INDEX] EXCEPTION in bucketed parsing: {e}")
             if total_chunks_stored == 0:
                 return False, 0
 

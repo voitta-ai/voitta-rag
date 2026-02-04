@@ -40,6 +40,9 @@ class Settings:
         self.chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "50"))
         self.chunking_strategy: str = os.getenv("CHUNKING_STRATEGY", "recursive")
 
+        # PDF bucketing settings (splitting large PDFs for processing)
+        self.pdf_pages_per_bucket: int = int(os.getenv("PDF_PAGES_PER_BUCKET", "20"))
+
         # Indexing worker settings
         self.indexing_poll_interval: int = int(os.getenv("INDEXING_POLL_INTERVAL", "10"))
 

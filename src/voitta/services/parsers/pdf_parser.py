@@ -1,6 +1,6 @@
 """PDF parser using MinerU for high-quality markdown extraction.
 
-Supports chunked processing for large PDFs - splits into smaller parts
+Supports bucketed processing for large PDFs - splits into smaller parts (buckets)
 and processes each separately for better reliability and progress feedback.
 """
 
@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Generator
 
 from .base import BaseParser, ParserResult
+from ...config import get_settings
 
 # Set up file logging for PDF parsing
 LOG_FILE = Path(__file__).parent.parent.parent.parent.parent / "logs" / "pdf_parsing.log"
@@ -39,9 +40,17 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 MINERU_PYTHON = PROJECT_ROOT / ".mineru-venv" / "bin" / "python"
 MINERU_SCRIPT = PROJECT_ROOT / "scripts" / "mineru_parse.py"
 
-# Chunking settings
-PAGES_PER_CHUNK = 50  # Process this many pages at a time for large PDFs
-MIN_PAGES_FOR_CHUNKING = 60  # Only chunk if more than this many pages
+def get_bucket_settings() -> tuple[int, int]:
+    """Get PDF bucketing settings from config.
+
+    Returns (pages_per_bucket, min_pages_for_bucketing).
+    min_pages_for_bucketing is set to 20% more than pages_per_bucket
+    to avoid bucketing PDFs that would only produce 1 bucket + a few pages.
+    """
+    settings = get_settings()
+    pages_per_bucket = settings.pdf_pages_per_bucket
+    min_pages_for_bucketing = int(pages_per_bucket * 1.2)
+    return pages_per_bucket, min_pages_for_bucketing
 
 
 def get_pdf_page_count(file_path: Path) -> int:
@@ -60,10 +69,10 @@ def get_pdf_page_count(file_path: Path) -> int:
         return -1
 
 
-def split_pdf(input_path: Path, output_dir: Path, pages_per_chunk: int) -> list[tuple[Path, int, int]]:
-    """Split a PDF into smaller chunks.
+def split_pdf(input_path: Path, output_dir: Path, pages_per_bucket: int) -> list[tuple[Path, int, int]]:
+    """Split a PDF into smaller buckets for processing.
 
-    Returns list of (chunk_path, start_page, end_page) tuples.
+    Returns list of (bucket_path, start_page, end_page) tuples.
     Pages are 1-indexed for display.
     """
     try:
@@ -74,32 +83,32 @@ def split_pdf(input_path: Path, output_dir: Path, pages_per_chunk: int) -> list[
 
     doc = fitz.open(input_path)
     total_pages = len(doc)
-    chunks = []
+    buckets = []
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    for start_page in range(0, total_pages, pages_per_chunk):
-        end_page = min(start_page + pages_per_chunk, total_pages)
-        chunk_num = start_page // pages_per_chunk + 1
+    for start_page in range(0, total_pages, pages_per_bucket):
+        end_page = min(start_page + pages_per_bucket, total_pages)
+        bucket_num = start_page // pages_per_bucket + 1
 
-        chunk_path = output_dir / f"chunk_{chunk_num:03d}.pdf"
+        bucket_path = output_dir / f"bucket_{bucket_num:03d}.pdf"
 
         # Create a new PDF with just these pages
-        chunk_doc = fitz.open()
-        chunk_doc.insert_pdf(doc, from_page=start_page, to_page=end_page - 1)
-        chunk_doc.save(str(chunk_path))
-        chunk_doc.close()
+        bucket_doc = fitz.open()
+        bucket_doc.insert_pdf(doc, from_page=start_page, to_page=end_page - 1)
+        bucket_doc.save(str(bucket_path))
+        bucket_doc.close()
 
         # Use 1-indexed pages for display
-        chunks.append((chunk_path, start_page + 1, end_page))
-        pdf_logger.info(f"Created chunk {chunk_num}: pages {start_page + 1}-{end_page}")
+        buckets.append((bucket_path, start_page + 1, end_page))
+        pdf_logger.info(f"Created bucket {bucket_num}: pages {start_page + 1}-{end_page}")
 
     doc.close()
-    return chunks
+    return buckets
 
 
 def parse_single_pdf(file_path: Path, method: str, lang: str) -> ParserResult:
-    """Parse a single PDF file (or chunk) using MinerU subprocess."""
+    """Parse a single PDF file (or bucket) using MinerU subprocess."""
     with tempfile.TemporaryDirectory() as tmpdir:
         output_dir = Path(tmpdir) / "output"
 
@@ -118,7 +127,7 @@ def parse_single_pdf(file_path: Path, method: str, lang: str) -> ParserResult:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=3600,  # 1 hour per chunk
+                timeout=3600,  # 1 hour per bucket
             )
         except subprocess.TimeoutExpired:
             return ParserResult.failure("MinerU timed out after 1 hour")
@@ -158,7 +167,7 @@ def parse_single_pdf(file_path: Path, method: str, lang: str) -> ParserResult:
 class PdfParser(BaseParser):
     """Parser for PDF files using MinerU.
 
-    Supports chunked processing for large PDFs.
+    Supports bucketed processing for large PDFs (splitting into smaller parts).
     """
 
     extensions = [".pdf"]
@@ -168,13 +177,13 @@ class PdfParser(BaseParser):
         self.lang = lang
 
     def parse(self, file_path: Path) -> ParserResult:
-        """Parse a PDF file. For large PDFs, use parse_chunked() instead."""
+        """Parse a PDF file. For large PDFs, use parse_in_buckets() instead."""
         # For backward compatibility, parse the whole file
-        results = list(self.parse_chunked(file_path))
+        results = list(self.parse_in_buckets(file_path))
         if not results:
             return ParserResult.failure("No results from parsing")
 
-        # Combine all chunk results
+        # Combine all bucket results
         all_content = []
         all_errors = []
 
@@ -193,17 +202,17 @@ class PdfParser(BaseParser):
                 "source_format": "pdf",
                 "parser": "mineru",
                 "filename": file_path.name,
-                "chunks_processed": len(results),
+                "buckets_processed": len(results),
             },
         )
 
-    def parse_chunked(self, file_path: Path) -> Generator[ParserResult, None, None]:
-        """Parse a PDF file in chunks, yielding results as they complete.
+    def parse_in_buckets(self, file_path: Path) -> Generator[ParserResult, None, None]:
+        """Parse a PDF file in buckets, yielding results as they complete.
 
         For small PDFs, yields a single result.
-        For large PDFs, yields one result per chunk.
+        For large PDFs, yields one result per bucket (50-page split).
 
-        Each result has metadata with 'chunk_index' and 'total_chunks'.
+        Each result has metadata with 'bucket_index' and 'total_buckets'.
         """
         file_size_mb = file_path.stat().st_size / 1024 / 1024 if file_path.exists() else 0
 
@@ -229,61 +238,62 @@ class PdfParser(BaseParser):
             yield ParserResult.failure(f"MinerU script not found at {MINERU_SCRIPT}")
             return
 
-        # Get page count to decide on chunking
+        # Get page count to decide on bucketing
         page_count = get_pdf_page_count(file_path)
         pdf_logger.info(f"Page count: {page_count}")
 
-        use_chunking = page_count > MIN_PAGES_FOR_CHUNKING and page_count > 0
+        pages_per_bucket, min_pages_for_bucketing = get_bucket_settings()
+        use_bucketing = page_count > min_pages_for_bucketing and page_count > 0
 
-        if use_chunking:
-            pdf_logger.info(f"Using CHUNKED processing ({page_count} pages, {PAGES_PER_CHUNK} per chunk)")
+        if use_bucketing:
+            pdf_logger.info(f"Using BUCKETED processing ({page_count} pages, {pages_per_bucket} per bucket)")
 
             with tempfile.TemporaryDirectory() as tmpdir:
-                chunks_dir = Path(tmpdir) / "chunks"
-                chunks = split_pdf(file_path, chunks_dir, PAGES_PER_CHUNK)
+                buckets_dir = Path(tmpdir) / "buckets"
+                buckets = split_pdf(file_path, buckets_dir, pages_per_bucket)
 
-                if not chunks:
+                if not buckets:
                     pdf_logger.error("Failed to split PDF")
-                    yield ParserResult.failure("Failed to split PDF into chunks")
+                    yield ParserResult.failure("Failed to split PDF into buckets")
                     return
 
-                total_chunks = len(chunks)
-                pdf_logger.info(f"Split into {total_chunks} chunks")
+                total_buckets = len(buckets)
+                pdf_logger.info(f"Split into {total_buckets} buckets")
 
-                for i, (chunk_path, start_page, end_page) in enumerate(chunks):
-                    chunk_start = time.time()
-                    chunk_num = i + 1
+                for i, (bucket_path, start_page, end_page) in enumerate(buckets):
+                    bucket_start = time.time()
+                    bucket_num = i + 1
 
-                    pdf_logger.info(f"Processing chunk {chunk_num}/{total_chunks} (pages {start_page}-{end_page})")
+                    pdf_logger.info(f"Processing bucket {bucket_num}/{total_buckets} (pages {start_page}-{end_page})")
 
-                    result = parse_single_pdf(chunk_path, self.method, self.lang)
-                    elapsed = time.time() - chunk_start
+                    result = parse_single_pdf(bucket_path, self.method, self.lang)
+                    elapsed = time.time() - bucket_start
 
                     if result.success:
-                        pdf_logger.info(f"Chunk {chunk_num} SUCCESS: {len(result.content)} chars in {elapsed:.1f}s")
-                        # Add chunk metadata
+                        pdf_logger.info(f"Bucket {bucket_num} SUCCESS: {len(result.content)} chars in {elapsed:.1f}s")
+                        # Add bucket metadata
                         result.metadata = {
                             "source_format": "pdf",
                             "parser": "mineru",
                             "filename": file_path.name,
-                            "chunk_index": i,
-                            "total_chunks": total_chunks,
+                            "bucket_index": i,
+                            "total_buckets": total_buckets,
                             "start_page": start_page,
                             "end_page": end_page,
                             "source_page_count": page_count,
                             "parse_time_seconds": elapsed,
                         }
                     else:
-                        pdf_logger.error(f"Chunk {chunk_num} FAILED: {result.error}")
+                        pdf_logger.error(f"Bucket {bucket_num} FAILED: {result.error}")
                         result.metadata = {
-                            "chunk_index": i,
-                            "total_chunks": total_chunks,
+                            "bucket_index": i,
+                            "total_buckets": total_buckets,
                         }
 
                     yield result
 
         else:
-            # Small PDF - process as single file
+            # Small PDF - process as single file (single bucket)
             pdf_logger.info("Using STANDARD processing (small PDF)")
 
             start_time = time.time()
@@ -296,8 +306,8 @@ class PdfParser(BaseParser):
                     "source_format": "pdf",
                     "parser": "mineru",
                     "filename": file_path.name,
-                    "chunk_index": 0,
-                    "total_chunks": 1,
+                    "bucket_index": 0,
+                    "total_buckets": 1,
                     "start_page": 1,
                     "end_page": page_count if page_count > 0 else None,
                     "source_page_count": page_count if page_count > 0 else None,
@@ -306,8 +316,8 @@ class PdfParser(BaseParser):
             else:
                 pdf_logger.error(f"FAILED: {result.error}")
                 result.metadata = {
-                    "chunk_index": 0,
-                    "total_chunks": 1,
+                    "bucket_index": 0,
+                    "total_buckets": 1,
                 }
 
             yield result
