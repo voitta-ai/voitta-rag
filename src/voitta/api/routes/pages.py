@@ -95,8 +95,9 @@ async def browse(
     if path:
         current_metadata, metadata_user = await metadata_svc.get_metadata_with_user(path)
 
-    # Get folder enabled status for current user
+    # Get folder enabled and search_active status for current user
     folder_enabled = False
+    folder_search_active = False
     if path and fs.is_dir(path):
         result = await db.execute(
             select(UserFolderSetting).where(
@@ -106,9 +107,24 @@ async def browse(
         )
         setting = result.scalar_one_or_none()
         folder_enabled = setting.enabled if setting else False
+        folder_search_active = setting.search_active if setting else False
+
+    # Get folder paths for listing queries
+    folder_paths = [item.path for item in items if item.is_dir]
+
+    # Get search_active status for all folders in the listing (per user)
+    folder_search_states = {}
+    if folder_paths:
+        result = await db.execute(
+            select(UserFolderSetting).where(
+                UserFolderSetting.user_id == user.id,
+                UserFolderSetting.folder_path.in_(folder_paths),
+            )
+        )
+        for setting in result.scalars().all():
+            folder_search_states[setting.folder_path] = setting.search_active
 
     # Get index status for all folders in the listing
-    folder_paths = [item.path for item in items if item.is_dir]
     index_statuses = {}
     folder_stats = {}  # folder_path -> {indexed_files, total_files, total_chunks}
     if folder_paths:
@@ -184,6 +200,8 @@ async def browse(
             "current_metadata": current_metadata,
             "metadata_user": metadata_user,
             "folder_enabled": folder_enabled,
+            "folder_search_active": folder_search_active,
+            "folder_search_states": folder_search_states,
             "index_statuses": index_statuses,
             "folder_stats": folder_stats,
             "file_index_statuses": file_index_statuses,
