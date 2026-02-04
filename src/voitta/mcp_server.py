@@ -237,10 +237,25 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
 
     Returns:
         List of indexed folders with status, file counts, and user metadata
+
+    Raises:
+        AuthError: If X-User-Name header is not provided
     """
+    # Require authentication
+    user_name = _get_current_user_name()
     engine = get_sync_engine()
 
     with Session(engine) as db:
+        # Get or create user
+        user = _get_or_create_user(db, user_name)
+
+        # Get user's active folders
+        user_active_folders = set(_get_user_active_folders(db, user.id))
+
+        # If no active folders, return empty list
+        if not user_active_folders:
+            return []
+
         # Get all folder index statuses
         result = db.execute(select(FolderIndexStatus))
         folder_statuses = {fs.folder_path: fs.status for fs in result.scalars().all()}
@@ -259,15 +274,19 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
             folder_stats[idx_folder]["total_chunks"] += f.chunk_count
 
         # Get folder metadata
-        folder_paths = list(set(folder_statuses.keys()) | set(folder_stats.keys()))
+        all_folder_paths = list(set(folder_statuses.keys()) | set(folder_stats.keys()))
         result = db.execute(
-            select(FileMetadata).where(FileMetadata.path.in_(folder_paths))
+            select(FileMetadata).where(FileMetadata.path.in_(all_folder_paths))
         )
         folder_metadata = {meta.path: meta.metadata_text for meta in result.scalars().all()}
 
-        # Build results
+        # Build results - only include folders active for this user
         results = []
-        for folder_path in folder_paths:
+        for folder_path in all_folder_paths:
+            # Skip folders not active for this user
+            if folder_path not in user_active_folders:
+                continue
+
             stats = folder_stats.get(folder_path, {"file_count": 0, "total_chunks": 0})
             results.append(
                 IndexedFolderInfo(
