@@ -1,6 +1,7 @@
 """MCP server for voitta-rag RAG capabilities."""
 
 import logging
+import mimetypes
 from contextvars import ContextVar
 from pathlib import Path
 
@@ -130,6 +131,16 @@ class ChunkRangeResult(BaseModel):
     error: str | None = Field(description="Error message if success is False")
 
 
+class FileUriResult(BaseModel):
+    """Result of getting a file URI for download."""
+
+    uri: str = Field(description="Full URI to download the raw file (use with wget/curl)")
+    file_path: str = Field(description="Path to the file (relative to root)")
+    file_name: str = Field(description="Name of the file")
+    size: int = Field(description="File size in bytes")
+    mime_type: str = Field(description="MIME type of the file")
+
+
 @mcp.tool()
 def search(
     query: str,
@@ -172,6 +183,22 @@ def search(
         if not user_active_folders:
             return []
 
+        # Get all unique folder_path values from indexed files
+        result = db.execute(select(IndexedFile.folder_path).distinct())
+        all_indexed_folder_paths = [row[0] for row in result.fetchall()]
+
+        # Expand active folders to include subfolders
+        # A folder_path is included if it equals an active folder OR starts with "active_folder/"
+        expanded_active_folders = set(user_active_folders)
+        for folder_path in all_indexed_folder_paths:
+            folder_normalized = folder_path.rstrip("/")
+            for active_folder in user_active_folders:
+                active_normalized = active_folder.rstrip("/")
+                # Include if exact match or is a subfolder
+                if folder_normalized == active_normalized or folder_normalized.startswith(active_normalized + "/"):
+                    expanded_active_folders.add(folder_path)
+                    break
+
         # Get disabled folders to exclude from search (by index_folder)
         result = db.execute(
             select(FolderIndexStatus.folder_path).where(FolderIndexStatus.status == "disabled")
@@ -181,12 +208,21 @@ def search(
     # Generate query embedding
     query_embedding = embedding_service.embed_query(query)
 
-    # Combine user's active folders with any explicit include_folders filter
-    # If include_folders is specified, intersect with user's active folders
-    effective_include_folders = user_active_folders
+    # Combine user's expanded active folders with any explicit include_folders filter
+    # If include_folders is specified, intersect with user's expanded active folders
+    effective_include_folders = list(expanded_active_folders)
     if include_folders:
-        # Only include folders that are both in user's active list AND in the requested list
-        effective_include_folders = [f for f in include_folders if f in user_active_folders]
+        # Only include folders that are both in user's expanded active list AND in the requested list
+        # Also include subfolders of requested folders
+        filtered_folders = set()
+        for f in effective_include_folders:
+            f_normalized = f.rstrip("/")
+            for requested in include_folders:
+                req_normalized = requested.rstrip("/")
+                if f_normalized == req_normalized or f_normalized.startswith(req_normalized + "/"):
+                    filtered_folders.add(f)
+                    break
+        effective_include_folders = list(filtered_folders)
         if not effective_include_folders:
             return []  # No overlap between requested and active folders
 
@@ -250,7 +286,7 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
         user = _get_or_create_user(db, user_name)
 
         # Get user's active folders
-        user_active_folders = set(_get_user_active_folders(db, user.id))
+        user_active_folders = _get_user_active_folders(db, user.id)
 
         # If no active folders, return empty list
         if not user_active_folders:
@@ -280,11 +316,20 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
         )
         folder_metadata = {meta.path: meta.metadata_text for meta in result.scalars().all()}
 
-        # Build results - only include folders active for this user
+        # Helper function to check if a folder is active (exact match or subfolder of active)
+        def is_folder_active(folder_path: str) -> bool:
+            folder_normalized = folder_path.rstrip("/")
+            for active_folder in user_active_folders:
+                active_normalized = active_folder.rstrip("/")
+                if folder_normalized == active_normalized or folder_normalized.startswith(active_normalized + "/"):
+                    return True
+            return False
+
+        # Build results - include folders that are active or subfolders of active folders
         results = []
         for folder_path in all_folder_paths:
-            # Skip folders not active for this user
-            if folder_path not in user_active_folders:
+            # Skip folders not active for this user (including subfolder check)
+            if not is_folder_active(folder_path):
                 continue
 
             stats = folder_stats.get(folder_path, {"file_count": 0, "total_chunks": 0})
@@ -480,6 +525,71 @@ def get_chunk_range(
     )
 
 
+@mcp.tool()
+def get_file_uri(file_path: str) -> FileUriResult:
+    """Get a download URI for a file, suitable for use with wget/curl.
+
+    Use this to get a direct download link for any file in the data directory.
+    The URI can be used with terminal tools like wget or curl to download the file.
+
+    Args:
+        file_path: Path to the file (relative to root), typically from search results
+
+    Returns:
+        URI and file metadata (size, mime_type)
+
+    Raises:
+        ValueError: If the file does not exist or path is invalid
+    """
+    settings = get_settings()
+    root = settings.root_path
+
+    # Resolve path securely
+    if not file_path or file_path == "/":
+        raise ValueError("File path required")
+
+    clean_path = file_path.lstrip("/")
+    full_path = (root / clean_path).resolve()
+
+    # Security: ensure path is within root
+    if not str(full_path).startswith(str(root)):
+        raise ValueError("Invalid file path")
+
+    if not full_path.exists():
+        raise ValueError(f"File not found: {file_path}")
+
+    if full_path.is_dir():
+        raise ValueError("Cannot get URI for a directory")
+
+    # Get file metadata
+    stat = full_path.stat()
+    size = stat.st_size
+
+    # Determine MIME type
+    mime_type, _ = mimetypes.guess_type(str(full_path))
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+
+    # Construct URI using main app host/port
+    # Use the main app port (not MCP port) since the raw endpoint is on the main app
+    host = settings.host
+    port = settings.port
+
+    # If host is 0.0.0.0, use localhost for the URI
+    if host == "0.0.0.0":
+        host = "localhost"
+
+    uri = f"http://{host}:{port}/api/raw/{clean_path}"
+
+    return FileUriResult(
+        uri=uri,
+        file_path=clean_path,
+        file_name=full_path.name,
+        size=size,
+        mime_type=mime_type,
+    )
+
+
 class FolderActiveState(BaseModel):
     """Active state of a folder for a user."""
 
@@ -504,6 +614,8 @@ def set_folder_active(
 ) -> SetFolderActiveResult:
     """Set a folder's active state for search. Also updates all subfolders to the same state.
 
+    The visibility cascades recursively to all subdirectories in the filesystem.
+
     Args:
         folder_path: Path to the folder
         is_active: Whether to activate (True) or deactivate (False) the folder
@@ -515,34 +627,53 @@ def set_folder_active(
         AuthError: If X-User-Name header is not provided
     """
     user_name = _get_current_user_name()
+    settings = get_settings()
     engine = get_sync_engine()
+
+    # Resolve and validate the folder path
+    root_path = settings.root_path
+    if not folder_path or folder_path == "/":
+        target_path = root_path
+    else:
+        clean_path = folder_path.lstrip("/")
+        target_path = (root_path / clean_path).resolve()
+
+    # Security check and existence check
+    if not str(target_path).startswith(str(root_path)):
+        return SetFolderActiveResult(
+            success=False,
+            folder_path=folder_path,
+            is_active=is_active,
+            subfolders_updated=0,
+            error="Invalid folder path",
+        )
+
+    if not target_path.exists() or not target_path.is_dir():
+        return SetFolderActiveResult(
+            success=False,
+            folder_path=folder_path,
+            is_active=is_active,
+            subfolders_updated=0,
+            error=f"Folder not found: {folder_path}",
+        )
+
+    # Walk filesystem recursively to find all subdirectories
+    folders_to_update = [folder_path]  # Include the target folder itself
+
+    try:
+        for item in target_path.rglob("*"):
+            if item.is_dir() and not item.name.startswith("."):
+                try:
+                    relative_path = str(item.relative_to(root_path))
+                    folders_to_update.append(relative_path)
+                except ValueError:
+                    continue
+    except (PermissionError, OSError):
+        pass  # Continue with folders we could access
 
     with Session(engine) as db:
         # Get or create user
         user = _get_or_create_user(db, user_name)
-
-        # Get all indexed folders to find subfolders
-        result = db.execute(select(FolderIndexStatus.folder_path))
-        all_folders = [row[0] for row in result.fetchall()]
-
-        # Find the target folder and all its subfolders
-        folders_to_update = []
-        folder_path_normalized = folder_path.rstrip("/")
-
-        for f in all_folders:
-            f_normalized = f.rstrip("/")
-            # Match exact folder or subfolders (folders that start with folder_path/)
-            if f_normalized == folder_path_normalized or f_normalized.startswith(folder_path_normalized + "/"):
-                folders_to_update.append(f)
-
-        if not folders_to_update:
-            return SetFolderActiveResult(
-                success=False,
-                folder_path=folder_path,
-                is_active=is_active,
-                subfolders_updated=0,
-                error=f"Folder not found: {folder_path}",
-            )
 
         # Update or create settings for all folders
         subfolders_updated = 0

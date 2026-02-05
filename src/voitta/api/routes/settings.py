@@ -70,8 +70,9 @@ async def toggle_search_active(
 ):
     """Toggle folder search active state for MCP search filtering.
 
-    When a folder is set to search_active=True, it (and optionally its subfolders)
+    When a folder is set to search_active=True, it and all its subfolders
     will be included in MCP search results for this user.
+    The visibility cascades recursively to all subdirectories in the filesystem.
     """
     if not fs.exists(path):
         raise HTTPException(
@@ -85,22 +86,17 @@ async def toggle_search_active(
             detail=f"Not a folder: {path}",
         )
 
-    # Get all indexed folders to find this folder and subfolders
-    result = await db.execute(select(FolderIndexStatus.folder_path))
-    all_indexed_folders = [row[0] for row in result.fetchall()]
+    # Walk filesystem recursively to find all subdirectories
+    root_path = fs._resolve_path(path)
+    folders_to_update = [path]  # Include the target folder itself
 
-    # Find target folder and subfolders
-    path_normalized = path.rstrip("/")
-    folders_to_update = []
-
-    for f in all_indexed_folders:
-        f_normalized = f.rstrip("/")
-        if f_normalized == path_normalized or f_normalized.startswith(path_normalized + "/"):
-            folders_to_update.append(f)
-
-    if not folders_to_update:
-        # Folder not indexed yet - just update this folder
-        folders_to_update = [path]
+    try:
+        for item in root_path.rglob("*"):
+            if item.is_dir() and not item.name.startswith("."):
+                relative_path = fs._to_relative(item)
+                folders_to_update.append(relative_path)
+    except (PermissionError, OSError):
+        pass  # Continue with folders we could access
 
     # Update or create settings for all folders
     for folder in folders_to_update:
