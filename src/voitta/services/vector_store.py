@@ -409,6 +409,145 @@ class VectorStoreService:
         except Exception:
             return 0
 
+    def count_chunks_for_files(self, file_paths: list[str]) -> dict[str, int]:
+        """Count chunks for multiple files in a single query.
+
+        Uses filtered scroll with MatchAny to efficiently batch the query.
+
+        Args:
+            file_paths: List of file paths to count chunks for
+
+        Returns:
+            Dict mapping file_path to chunk count (only files with chunks > 0)
+        """
+        if not file_paths:
+            return {}
+
+        try:
+            file_counts: dict[str, int] = {}
+            offset = None
+
+            while True:
+                results, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    limit=1000,
+                    offset=offset,
+                    scroll_filter=qmodels.Filter(
+                        must=[
+                            qmodels.FieldCondition(
+                                key="file_path",
+                                match=qmodels.MatchAny(any=file_paths),
+                            )
+                        ]
+                    ),
+                    with_payload=["file_path"],
+                    with_vectors=False,
+                )
+
+                for point in results:
+                    file_path = point.payload.get("file_path", "")
+                    file_counts[file_path] = file_counts.get(file_path, 0) + 1
+
+                if offset is None:
+                    break
+
+            return file_counts
+        except Exception as e:
+            logger.error(f"Error counting chunks for files: {e}")
+            return {}
+
+    def count_chunks_for_folder(self, folder_path: str) -> tuple[int, int]:
+        """Count indexed files and total chunks for a folder (recursively).
+
+        Uses filtered scroll on folder_path prefix matching via iteration.
+
+        Args:
+            folder_path: The folder path to count for
+
+        Returns:
+            Tuple of (indexed_file_count, total_chunk_count)
+        """
+        try:
+            prefix = folder_path + "/" if folder_path else ""
+            file_chunks: dict[str, int] = {}
+            offset = None
+
+            while True:
+                results, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=["file_path"],
+                    with_vectors=False,
+                )
+
+                for point in results:
+                    file_path = point.payload.get("file_path", "")
+                    # Check if file is inside this folder
+                    if file_path.startswith(prefix) or (not prefix and "/" not in file_path):
+                        file_chunks[file_path] = file_chunks.get(file_path, 0) + 1
+
+                if offset is None:
+                    break
+
+            return len(file_chunks), sum(file_chunks.values())
+        except Exception as e:
+            logger.error(f"Error counting chunks for folder {folder_path}: {e}")
+            return 0, 0
+
+    def get_folder_stats_batch(self, folder_paths: list[str]) -> dict[str, tuple[int, int]]:
+        """Get indexed file count and chunk count for multiple folders.
+
+        Performs a single scan and computes stats for all folders at once.
+
+        Args:
+            folder_paths: List of folder paths to get stats for
+
+        Returns:
+            Dict mapping folder_path to (indexed_file_count, total_chunk_count)
+        """
+        if not folder_paths:
+            return {}
+
+        try:
+            # Build prefix list for matching
+            prefixes = [(fp, fp + "/" if fp else "") for fp in folder_paths]
+
+            # Track files per folder
+            folder_files: dict[str, dict[str, int]] = {fp: {} for fp in folder_paths}
+
+            offset = None
+            while True:
+                results, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    limit=1000,
+                    offset=offset,
+                    with_payload=["file_path"],
+                    with_vectors=False,
+                )
+
+                for point in results:
+                    file_path = point.payload.get("file_path", "")
+
+                    # Check which folders this file belongs to
+                    for folder_path, prefix in prefixes:
+                        if file_path.startswith(prefix) or (not prefix and "/" not in file_path):
+                            folder_files[folder_path][file_path] = (
+                                folder_files[folder_path].get(file_path, 0) + 1
+                            )
+
+                if offset is None:
+                    break
+
+            # Compute stats
+            return {
+                fp: (len(files), sum(files.values()))
+                for fp, files in folder_files.items()
+            }
+        except Exception as e:
+            logger.error(f"Error getting folder stats batch: {e}")
+            return {fp: (0, 0) for fp in folder_paths}
+
     def get_stored_page_count(self, file_path: str) -> int | None:
         """Get the stored source_page_count for a PDF file.
 

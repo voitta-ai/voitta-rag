@@ -5,11 +5,10 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from ..deps import DB, CurrentUser, Filesystem, Metadata
 from ...db.models import FolderIndexStatus, IndexedFile, UserFolderSetting
-from ...services.vector_store import get_vector_store
 
 router = APIRouter()
 
@@ -91,15 +90,18 @@ async def get_item_details(
         status_row = result.scalar_one_or_none()
         index_status = status_row.status if status_row else "none"
 
-        # Calculate file type stats (recursive)
+        # Calculate file type stats from indexed_files + filesystem
         file_type_stats = await _get_file_type_stats(fs, db, path)
     else:
-        # Get file index info from Qdrant (real-time chunk count)
-        vector_store = get_vector_store()
-        chunk_count = vector_store.count_by_file(path)
-        if chunk_count > 0:
+        # Get file index info from indexed_files table
+        result = await db.execute(
+            select(IndexedFile).where(IndexedFile.file_path == path)
+        )
+        indexed_file = result.scalar_one_or_none()
+        if indexed_file and indexed_file.chunk_count > 0:
             index_status = "indexed"
-            indexed_at = None  # Not available from Qdrant directly
+            chunk_count = indexed_file.chunk_count
+            indexed_at = indexed_file.indexed_at.isoformat() if indexed_file.indexed_at else None
         else:
             index_status = "none"
 
@@ -138,14 +140,17 @@ async def _get_file_type_stats(fs: Filesystem, db: DB, folder_path: str) -> list
     if not ext_counts:
         return []
 
-    # Get chunk counts from Qdrant (real-time)
-    vector_store = get_vector_store()
+    # Get indexed file stats from DB instead of Qdrant
     prefix = folder_path + "/" if folder_path else ""
-    qdrant_file_counts = vector_store.get_file_chunk_counts(prefix)
+    result = await db.execute(
+        select(IndexedFile.file_path, IndexedFile.chunk_count).where(
+            IndexedFile.file_path.like(prefix + "%")
+        )
+    )
 
     # Group by extension
     indexed_by_ext: dict[str, tuple[int, int]] = defaultdict(lambda: (0, 0))
-    for file_path, chunks in qdrant_file_counts.items():
+    for file_path, chunks in result.all():
         ext = Path(file_path).suffix.lower() if Path(file_path).suffix else "(no extension)"
         count, total_chunks = indexed_by_ext[ext]
         indexed_by_ext[ext] = (count + 1, total_chunks + chunks)

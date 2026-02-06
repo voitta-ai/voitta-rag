@@ -73,7 +73,7 @@ Key settings in `.env`:
 
 ```bash
 # Root folder for managed files
-ROOT_PATH=./data
+ROOT_PATH=/mnt/ssddata/data/voitta-rag-data
 
 # Qdrant connection
 QDRANT_HOST=localhost
