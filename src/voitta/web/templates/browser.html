@@ -88,9 +88,9 @@
                         </label>
                         {% endif %}
                     </div>
-                    <div class="col-size">{{ item.size | filesizeformat }}</div>
+                    <div class="col-size">{% if not item.is_dir %}{{ item.size | filesizeformat }}{% else %}—{% endif %}</div>
                     <div class="col-status">
-                        <span class="index-status-tag status-{{ item_index_status or 'none' }}" title="{% if item.is_dir and stats %}{{ stats.get('indexed_files', 0) }}/{{ stats.get('total_files', 0) }} files, {{ stats.get('total_chunks', 0) }} chunks{% elif file_chunk_count %}{{ file_chunk_count }} chunks{% else %}{{ item_index_status or 'none' }}{% endif %}">
+                        <span class="index-status-tag status-{{ item_index_status or 'none' }}" title="{% if item.is_dir and stats %}{{ stats.get('indexed_files', 0) }} files indexed, {{ stats.get('total_chunks', 0) }} chunks{% elif file_chunk_count %}{{ file_chunk_count }} chunks{% else %}{{ item_index_status or 'none' }}{% endif %}">
                             {% if item.is_dir %}
                                 {% if item_index_status == 'indexed' or item_index_status == 'disabled' %}
                                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" class="status-icon-sm">
@@ -112,8 +112,8 @@
                                     <line x1="9" y1="9" x2="15" y2="15"></line>
                                 </svg>
                                 {% endif %}
-                                {% if stats and (stats.get('indexed_files', 0) > 0 or stats.get('total_files', 0) > 0) %}
-                                <span class="folder-stats">{{ stats.get('indexed_files', 0) }}/{{ stats.get('total_files', 0) }}{% if stats.get('total_chunks', 0) > 0 %} · {{ stats.get('total_chunks', 0) }}{% endif %}</span>
+                                {% if stats and (stats.get('indexed_files', 0) > 0 or stats.get('total_chunks', 0) > 0) %}
+                                <span class="folder-stats">{{ stats.get('indexed_files', 0) }} files{% if stats.get('total_chunks', 0) > 0 %} · {{ stats.get('total_chunks', 0) }}{% endif %}</span>
                                 {% elif item_index_status != 'none' %}
                                 {{ item_index_status|capitalize }}
                                 {% else %}

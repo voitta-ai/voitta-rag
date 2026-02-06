@@ -102,20 +102,21 @@ class FilesystemService:
             if item.name.startswith("."):
                 continue
             try:
-                items.append(self._get_file_info(item))
+                # Skip recursive dir size calculation during listing for performance
+                items.append(self._get_file_info(item, calculate_dir_size=False))
             except (PermissionError, OSError):
                 continue
 
         return items
 
-    def get_info(self, relative_path: str) -> FileInfo:
+    def get_info(self, relative_path: str, calculate_dir_size: bool = True) -> FileInfo:
         """Get info for a specific file or folder."""
         path = self._resolve_path(relative_path)
 
         if not path.exists():
             raise FileNotFoundError(f"Path not found: {relative_path}")
 
-        return self._get_file_info(path)
+        return self._get_file_info(path, calculate_dir_size=calculate_dir_size)
 
     def create_folder(self, relative_path: str, name: str) -> FileInfo:
         """Create a new folder."""

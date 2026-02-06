@@ -15,7 +15,7 @@ class Settings:
     def __init__(self):
         # Core settings
         self.root_path: Path = Path(
-            os.getenv("VOITTA_ROOT_PATH", "./data")
+            os.getenv("VOITTA_ROOT_PATH", "/mnt/ssddata/data/voitta-rag-data")
         ).resolve()
         self.db_path: Path = Path(
             os.getenv("VOITTA_DB_PATH", "./voitta.db")
