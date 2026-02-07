@@ -6,6 +6,27 @@
     <title>{% block title %}voitta-rag{% endblock %}</title>
     <link rel="stylesheet" href="/static/css/styles.css">
     {% block head %}{% endblock %}
+    <style>
+        .spinner-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            z-index: 9999;
+            background: rgba(0, 0, 0, 0.3);
+            align-items: center;
+            justify-content: center;
+        }
+        .spinner-overlay.active { display: flex; }
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
 </head>
 <body>
     <header class="app-header">
@@ -36,6 +57,11 @@
     <main class="app-main">
         {% block content %}{% endblock %}
     </main>
+
+    <!-- Loading Spinner Overlay -->
+    <div class="spinner-overlay" id="spinner-overlay">
+        <div class="spinner"></div>
+    </div>
 
     <script src="/static/js/app.js"></script>
     {% block scripts %}{% endblock %}
