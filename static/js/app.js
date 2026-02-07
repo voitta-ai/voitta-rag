@@ -24,9 +24,15 @@ function toggleTheme() {
     setTheme(next);
 }
 
-// Initialize theme on page load
+// Initialize theme on page load + hide spinner
 document.addEventListener('DOMContentLoaded', () => {
     setTheme(getPreferredTheme());
+    hideSpinner();
+});
+
+// Show spinner on page unload (navigation / reload)
+window.addEventListener('beforeunload', () => {
+    showSpinner();
 });
 
 // ============================================
@@ -203,6 +209,8 @@ let selectedPath = null;
 let selectedIsDir = false;
 
 function selectItem(element, path, isDir) {
+    const alreadySelected = selectedPath === path;
+
     // Remove selection from previous item
     if (selectedItem) {
         selectedItem.classList.remove('selected');
@@ -214,8 +222,10 @@ function selectItem(element, path, isDir) {
     selectedPath = path;
     selectedIsDir = isDir;
 
-    // Fetch and display item details in sidebar
-    loadItemDetails(path);
+    // Fetch details only if selecting a new item
+    if (!alreadySelected) {
+        loadItemDetails(path, isDir);
+    }
 
     // If it's a folder, navigate on double-click
     if (isDir) {
@@ -226,7 +236,8 @@ function selectItem(element, path, isDir) {
     }
 }
 
-async function loadItemDetails(path) {
+async function loadItemDetails(path, isDir = true) {
+    if (isDir) showSpinner(300);
     try {
         const response = await fetch(`/api/details/${encodeURIComponent(path)}`);
         if (!response.ok) throw new Error('Failed to load details');
@@ -235,6 +246,8 @@ async function loadItemDetails(path) {
         updateSidebar(data);
     } catch (error) {
         console.error('Error loading item details:', error);
+    } finally {
+        hideSpinner();
     }
 }
 
@@ -592,6 +605,38 @@ function showToast(message, type = 'info') {
         toast.style.transform = 'translateX(100%)';
         setTimeout(() => toast.remove(), 300);
     }, 4000);
+}
+
+// ============================================
+// Loading Spinner
+// ============================================
+
+let spinnerTimeout = null;
+
+function showSpinner(delay = 0) {
+    clearSpinnerTimeout();
+    if (delay > 0) {
+        spinnerTimeout = setTimeout(() => {
+            const overlay = document.getElementById('spinner-overlay');
+            if (overlay) overlay.classList.add('active');
+        }, delay);
+    } else {
+        const overlay = document.getElementById('spinner-overlay');
+        if (overlay) overlay.classList.add('active');
+    }
+}
+
+function hideSpinner() {
+    clearSpinnerTimeout();
+    const overlay = document.getElementById('spinner-overlay');
+    if (overlay) overlay.classList.remove('active');
+}
+
+function clearSpinnerTimeout() {
+    if (spinnerTimeout) {
+        clearTimeout(spinnerTimeout);
+        spinnerTimeout = null;
+    }
 }
 
 // ============================================

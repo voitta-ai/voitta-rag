@@ -285,5 +285,13 @@
 
     // Initialize WebSocket connection
     initWebSocket();
+
+    // Auto-load current folder stats in sidebar
+    if (currentPath) {
+        fetch(`/api/details/${encodeURIComponent(currentPath)}`)
+            .then(r => r.json())
+            .then(data => updateSidebar(data))
+            .catch(() => {});
+    }
 </script>
 {% endblock %}
