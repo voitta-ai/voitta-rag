@@ -76,6 +76,24 @@ async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+def _migrate_missing_columns(engine: Engine) -> None:
+    """Add any columns defined in models but missing from the SQLite database."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    for table in Base.metadata.sorted_tables:
+        if not inspector.has_table(table.name):
+            continue
+        existing = {col["name"] for col in inspector.get_columns(table.name)}
+        for col in table.columns:
+            if col.name not in existing:
+                col_type = col.type.compile(dialect=engine.dialect)
+                with engine.begin() as conn:
+                    conn.execute(
+                        text(f"ALTER TABLE {table.name} ADD COLUMN {col.name} {col_type}")
+                    )
+
+
 def init_db() -> None:
     """Initialize database tables and seed default users."""
     from sqlalchemy.orm import Session
@@ -84,6 +102,9 @@ def init_db() -> None:
 
     # Create all tables
     Base.metadata.create_all(bind=sync_engine)
+
+    # Add any new columns to existing tables
+    _migrate_missing_columns(sync_engine)
 
     # Seed default users
     with Session(sync_engine) as session:

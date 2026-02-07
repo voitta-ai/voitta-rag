@@ -94,7 +94,7 @@ class FolderSyncSource(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     folder_path: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False, index=True)
-    # source_type: "sharepoint", "google_drive", "github"
+    # source_type: "sharepoint", "google_drive", "github", "azure_devops"
     source_type: Mapped[str] = mapped_column(String(20), nullable=False)
 
     # SharePoint credentials
@@ -114,6 +114,15 @@ class FolderSyncSource(Base):
     gh_repo: Mapped[str | None] = mapped_column(String(255), nullable=True)
     gh_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     gh_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    # Azure DevOps credentials
+    ado_tenant_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ado_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ado_client_secret: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    ado_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ado_organization: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ado_project: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ado_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     # Sync status tracking
     sync_status: Mapped[str] = mapped_column(String(20), default="idle")

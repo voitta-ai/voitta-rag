@@ -128,6 +128,7 @@
                         <option value="sharepoint">SharePoint</option>
                         <option value="google_drive">Google Drive</option>
                         <option value="github">GitHub</option>
+                        <option value="azure_devops">Azure DevOps</option>
                     </select>
                 </div>
 
@@ -143,7 +144,7 @@
                     </div>
                     <div class="form-group-compact">
                         <label class="form-label-compact">Client Secret</label>
-                        <input type="password" id="sp-client-secret" class="sync-input" placeholder="Client secret">
+                        <input type="text" id="sp-client-secret" class="sync-input" placeholder="Client secret">
                     </div>
                     <div class="form-group-compact">
                         <label class="form-label-compact">Site URL</label>
@@ -182,7 +183,7 @@
                 <div id="sync-fields-github" class="sync-fields" style="display: none;">
                     <div class="form-group-compact">
                         <label class="form-label-compact">Token</label>
-                        <input type="password" id="gh-token" class="sync-input" placeholder="ghp_... or fine-grained token">
+                        <input type="text" id="gh-token" class="sync-input" placeholder="ghp_... or fine-grained token">
                     </div>
                     <div class="form-group-compact">
                         <label class="form-label-compact">Repository</label>
@@ -195,6 +196,37 @@
                     <div class="form-group-compact">
                         <label class="form-label-compact">Path</label>
                         <input type="text" id="gh-path" class="sync-input" placeholder="subfolder/within/repo (optional)">
+                    </div>
+                </div>
+
+                <!-- Azure DevOps Fields -->
+                <div id="sync-fields-azure_devops" class="sync-fields" style="display: none;">
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Tenant ID</label>
+                        <input type="text" id="ado-tenant-id" class="sync-input" placeholder="xxxxxxxx-xxxx-...">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Client ID</label>
+                        <input type="text" id="ado-client-id" class="sync-input" placeholder="App registration client ID">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Client Secret</label>
+                        <input type="text" id="ado-client-secret" class="sync-input" placeholder="Client secret">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">DevOps URL</label>
+                        <input type="text" id="ado-url" class="sync-input" placeholder="https://dev.azure.com/{org}/{project}">
+                    </div>
+                    <div class="sp-connect-row">
+                        <button class="btn btn-secondary btn-sm" id="btn-ado-connect" onclick="connectAzureDevOps()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                                <polyline points="10 17 15 12 10 7"></polyline>
+                                <line x1="15" y1="12" x2="3" y2="12"></line>
+                            </svg>
+                            Connect
+                        </button>
+                        <span class="sp-connect-status" id="ado-connect-status"></span>
                     </div>
                 </div>
 

@@ -77,6 +77,9 @@ function initWebSocket() {
             case 'sp_connected':
                 handleSpConnectedEvent(data);
                 break;
+            case 'ado_connected':
+                handleAdoConnectedEvent(data);
+                break;
             default:
                 // Filesystem events: created, deleted, modified, moved
                 handleFileSystemEvent(data);
@@ -138,6 +141,11 @@ function handleFileSystemEvent(event) {
 function handleSyncStatusEvent(event) {
     // event: { type: 'sync_status', path, sync_status, sync_error, last_synced_at }
     const folderPath = event.path;
+
+    // Track syncing folders so file-level notifications are suppressed
+    if (event.sync_status === 'syncing') {
+        syncingFolders.add(folderPath);
+    }
 
     // Update sync status displays if this folder is currently selected/viewed
     if (selectedPath === folderPath || currentPath === folderPath) {
@@ -232,6 +240,17 @@ function handleSpConnectedEvent(event) {
         // Reload sync source to get updated data
         loadSyncSource(folderPath);
         showToast('SharePoint connected successfully', 'success');
+    }
+}
+
+function handleAdoConnectedEvent(event) {
+    // event: { type: 'ado_connected', path }
+    const folderPath = event.path;
+
+    if (selectedPath === folderPath || currentPath === folderPath) {
+        updateAdoConnectStatus(true);
+        loadSyncSource(folderPath);
+        showToast('Azure DevOps connected successfully', 'success');
     }
 }
 
@@ -850,6 +869,12 @@ function onSyncSourceTypeChange(value) {
 
 function populateSyncFields(data) {
     currentSyncSource = data;
+
+    // Track syncing folders so file notifications are suppressed during sync
+    if (data.sync_status === 'syncing' && data.folder_path) {
+        syncingFolders.add(data.folder_path);
+    }
+
     const locked = data.source_type && !currentFolderIsEmpty;
 
     const select = document.getElementById('sync-source-type');
@@ -872,6 +897,12 @@ function populateSyncFields(data) {
         document.getElementById('gh-repo').value = data.github.repo || '';
         document.getElementById('gh-branch').value = data.github.branch || 'main';
         document.getElementById('gh-path').value = data.github.path || '';
+    } else if (data.source_type === 'azure_devops' && data.azure_devops) {
+        document.getElementById('ado-tenant-id').value = data.azure_devops.tenant_id || '';
+        document.getElementById('ado-client-id').value = data.azure_devops.client_id || '';
+        document.getElementById('ado-client-secret').value = data.azure_devops.client_secret || '';
+        document.getElementById('ado-url').value = data.azure_devops.url || '';
+        updateAdoConnectStatus(data.azure_devops.connected);
     }
 
     // Lock inputs and hide save/remove when folder has synced content
@@ -1008,6 +1039,13 @@ function gatherSyncConfig() {
             branch: document.getElementById('gh-branch').value.trim() || 'main',
             path: document.getElementById('gh-path').value.trim(),
         };
+    } else if (sourceType === 'azure_devops') {
+        config.azure_devops = {
+            tenant_id: document.getElementById('ado-tenant-id').value.trim(),
+            client_id: document.getElementById('ado-client-id').value.trim(),
+            client_secret: document.getElementById('ado-client-secret').value.trim(),
+            url: document.getElementById('ado-url').value.trim(),
+        };
     }
 
     return config;
@@ -1137,8 +1175,8 @@ async function connectSharePoint() {
             throw new Error(error.detail || 'Failed to save config');
         }
 
-        // Get the auth URL
-        const resp = await fetch(`/api/sync/sharepoint/auth?folder_path=${encodeURIComponent(targetPath)}`);
+        // Get the auth URL (unified OAuth endpoint)
+        const resp = await fetch(`/api/sync/oauth/auth?folder_path=${encodeURIComponent(targetPath)}`);
         if (!resp.ok) {
             const error = await resp.json();
             throw new Error(error.detail || 'Failed to start SharePoint auth');
@@ -1150,6 +1188,63 @@ async function connectSharePoint() {
 
         showToast('Sign in to Microsoft in the new tab. This page will update when done.', 'info');
         // No polling needed — WebSocket sp_connected event will update the UI
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+function updateAdoConnectStatus(connected) {
+    const el = document.getElementById('ado-connect-status');
+    const btn = document.getElementById('btn-ado-connect');
+    if (!el) return;
+
+    if (connected) {
+        el.className = 'sp-connect-status connected';
+        el.textContent = 'Connected';
+        if (btn) btn.textContent = 'Reconnect';
+    } else {
+        el.className = 'sp-connect-status not-connected';
+        el.textContent = 'Not connected';
+        if (btn) btn.textContent = 'Connect';
+    }
+}
+
+async function connectAzureDevOps() {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) {
+        showToast('No folder selected', 'error');
+        return;
+    }
+
+    const config = gatherSyncConfig();
+    if (!config) {
+        showToast('Select Azure DevOps and fill in the fields first', 'error');
+        return;
+    }
+
+    try {
+        // Save config first
+        const saveResp = await fetch(`/api/sync/${encodeURIComponent(targetPath)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        });
+        if (!saveResp.ok) {
+            const error = await saveResp.json();
+            throw new Error(error.detail || 'Failed to save config');
+        }
+
+        // Get the auth URL (unified OAuth endpoint)
+        const resp = await fetch(`/api/sync/oauth/auth?folder_path=${encodeURIComponent(targetPath)}`);
+        if (!resp.ok) {
+            const error = await resp.json();
+            throw new Error(error.detail || 'Failed to start Azure DevOps auth');
+        }
+
+        const data = await resp.json();
+        window.open(data.auth_url, '_blank');
+
+        showToast('Sign in to Microsoft in the new tab. This page will update when done.', 'info');
     } catch (error) {
         showToast(error.message, 'error');
     }
