@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +18,35 @@ from .services.watcher import file_watcher
 
 # Get project root for static files and templates
 PROJECT_ROOT = Path(__file__).parent.parent.parent
+
+
+def setup_logging():
+    """Configure file-based logging. Wipes log files on each restart."""
+    log_dir = PROJECT_ROOT / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    log_format = "%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"
+    formatter = logging.Formatter(log_format)
+
+    # App log — mode='w' wipes on restart
+    app_handler = logging.FileHandler(log_dir / "app.log", mode="w", encoding="utf-8")
+    app_handler.setFormatter(formatter)
+    app_handler.setLevel(logging.DEBUG)
+
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(app_handler)
+
+    # Quiet down noisy loggers
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.engine.Engine").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+
+setup_logging()
 
 # Get MCP app early so we can use its lifespan
 settings = get_settings()

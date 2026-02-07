@@ -63,7 +63,25 @@ function initWebSocket() {
 
         if (data.type === 'ping') return;
 
-        handleFileSystemEvent(data);
+        // Route to appropriate handler based on event type
+        switch (data.type) {
+            case 'sync_status':
+                handleSyncStatusEvent(data);
+                break;
+            case 'index_status':
+                handleIndexStatusEvent(data);
+                break;
+            case 'index_complete':
+                handleIndexCompleteEvent(data);
+                break;
+            case 'sp_connected':
+                handleSpConnectedEvent(data);
+                break;
+            default:
+                // Filesystem events: created, deleted, modified, moved
+                handleFileSystemEvent(data);
+                break;
+        }
     };
 
     ws.onclose = () => {
@@ -75,6 +93,10 @@ function initWebSocket() {
         console.error('WebSocket error:', error);
     };
 }
+
+// ============================================
+// WebSocket Event Handlers
+// ============================================
 
 function handleFileSystemEvent(event) {
     // Suppress notifications for files inside syncing folders
@@ -113,20 +135,154 @@ function handleFileSystemEvent(event) {
     }
 }
 
+function handleSyncStatusEvent(event) {
+    // event: { type: 'sync_status', path, sync_status, sync_error, last_synced_at }
+    const folderPath = event.path;
+
+    // Update sync status displays if this folder is currently selected/viewed
+    if (selectedPath === folderPath || currentPath === folderPath) {
+        updateSyncStatusDisplay({
+            ...currentSyncSource,
+            sync_status: event.sync_status,
+            sync_error: event.sync_error,
+            last_synced_at: event.last_synced_at,
+        });
+        updateFolderSyncStatus(event.sync_status, event.last_synced_at);
+    }
+
+    // If sync finished, stop tracking and refresh file list
+    if (event.sync_status !== 'syncing') {
+        syncingFolders.delete(folderPath);
+        if (typeof currentPath !== 'undefined') {
+            // Refresh if the synced folder is visible
+            if (folderPath === currentPath || folderPath.startsWith(currentPath + '/') ||
+                currentPath.startsWith(folderPath + '/')) {
+                refreshFileList();
+            }
+        }
+        if (event.sync_status === 'synced') {
+            showToast(`Sync complete: ${folderPath}`, 'success');
+        } else if (event.sync_status === 'error') {
+            showToast(`Sync failed: ${folderPath}`, 'error');
+        }
+    }
+}
+
+function handleIndexStatusEvent(event) {
+    // event: { type: 'index_status', path, status }
+    const folderPath = event.path;
+    const status = event.status;
+
+    // Update file list badge
+    updateFileListIndexStatus(folderPath, status);
+
+    // Update sidebar if this folder is selected
+    if (selectedPath === folderPath || currentPath === folderPath) {
+        const statusValue = document.getElementById('index-status-value');
+        if (statusValue) {
+            statusValue.className = `index-status-value status-${status}`;
+            const statusLabels = {
+                'indexed': 'Indexed',
+                'indexing': 'Indexing...',
+                'pending': 'Pending',
+                'error': 'Error',
+                'none': 'Not indexed'
+            };
+            statusValue.textContent = statusLabels[status] || 'Not indexed';
+        }
+    }
+}
+
+function handleIndexCompleteEvent(event) {
+    // event: { type: 'index_complete', path, files_indexed, total_chunks }
+    const folderPath = event.path;
+
+    // Update file list badge to 'indexed'
+    updateFileListIndexStatus(folderPath, 'indexed');
+
+    // Update sidebar if this folder is selected
+    if (selectedPath === folderPath || currentPath === folderPath) {
+        const statusValue = document.getElementById('index-status-value');
+        if (statusValue) {
+            statusValue.className = 'index-status-value status-indexed';
+            statusValue.textContent = 'Indexed';
+        }
+        // Reload sidebar details to get updated stats
+        loadItemDetails(folderPath, true);
+    }
+
+    // Refresh file list to update stats columns
+    if (typeof currentPath !== 'undefined') {
+        if (folderPath === currentPath || folderPath.startsWith(currentPath + '/') ||
+            currentPath.startsWith(folderPath + '/')) {
+            refreshFileList();
+        }
+    }
+
+    showToast(`Indexing complete: ${event.files_indexed} files, ${event.total_chunks} chunks`, 'success');
+}
+
+function handleSpConnectedEvent(event) {
+    // event: { type: 'sp_connected', path }
+    const folderPath = event.path;
+
+    // Update UI if we're looking at this folder
+    if (selectedPath === folderPath || currentPath === folderPath) {
+        updateSpConnectStatus(true);
+        // Reload sync source to get updated data
+        loadSyncSource(folderPath);
+        showToast('SharePoint connected successfully', 'success');
+    }
+}
+
 // ============================================
 // File Operations
 // ============================================
 
-async function refreshFileList() {
-    try {
-        const response = await fetch(`/api/folders/${currentPath}`);
-        if (!response.ok) throw new Error('Failed to fetch folder contents');
+let refreshDebounceTimeout = null;
 
-        // Reload the page to get updated content
-        window.location.reload();
-    } catch (error) {
-        console.error('Error refreshing file list:', error);
+async function refreshFileList() {
+    // Debounce rapid refreshes (e.g. multiple file events in quick succession)
+    if (refreshDebounceTimeout) {
+        clearTimeout(refreshDebounceTimeout);
     }
+
+    refreshDebounceTimeout = setTimeout(async () => {
+        refreshDebounceTimeout = null;
+        try {
+            const url = currentPath
+                ? `/api/browse-list/${encodeURIComponent(currentPath)}`
+                : '/api/browse-list';
+            const response = await fetch(url);
+            if (!response.ok) throw new Error('Failed to fetch file list');
+
+            const html = await response.text();
+            const fileList = document.getElementById('file-list');
+            if (!fileList) return;
+
+            // Remember current selection
+            const prevSelectedPath = selectedPath;
+
+            // Replace file list content
+            fileList.innerHTML = html;
+
+            // Restore selection if the item still exists
+            if (prevSelectedPath) {
+                const item = fileList.querySelector(`.file-item[data-path="${CSS.escape(prevSelectedPath)}"]`);
+                if (item) {
+                    item.classList.add('selected');
+                    selectedItem = item;
+                } else {
+                    // Item was deleted or moved — clear selection
+                    selectedItem = null;
+                    selectedPath = null;
+                    selectedIsDir = false;
+                }
+            }
+        } catch (error) {
+            console.error('Error refreshing file list:', error);
+        }
+    }, 300);
 }
 
 async function uploadFiles(files) {
@@ -157,7 +313,7 @@ async function uploadFiles(files) {
     // Clear the file input
     document.getElementById('file-upload').value = '';
 
-    // Refresh the file list
+    // File watcher will trigger refresh via WebSocket, but refresh immediately too
     refreshFileList();
 }
 
@@ -200,7 +356,7 @@ async function createFolder(event) {
 
         showToast(`Created folder: ${name}`, 'success');
         closeCreateFolderModal();
-        refreshFileList();
+        // File watcher will trigger refresh via WebSocket
     } catch (error) {
         showToast(error.message, 'error');
     }
@@ -563,7 +719,7 @@ async function reindexFolder() {
 
 function updateFileListIndexStatus(path, status) {
     // Find the file item in the list and update its status tag
-    const fileItem = document.querySelector(`.file-item[data-path="${path}"]`);
+    const fileItem = document.querySelector(`.file-item[data-path="${CSS.escape(path)}"]`);
     if (!fileItem) return;
 
     fileItem.dataset.indexStatus = status;
@@ -676,7 +832,6 @@ function escapeHtml(text) {
 // ============================================
 
 let currentSyncSource = null;
-let syncPollInterval = null;
 let syncingFolders = new Set();
 let currentFolderIsEmpty = true;
 
@@ -719,15 +874,14 @@ function populateSyncFields(data) {
         document.getElementById('gh-path').value = data.github.path || '';
     }
 
-    // Lock inputs and hide save/remove/connect when folder has synced content
+    // Lock inputs and hide save/remove when folder has synced content
+    // Keep the Connect/Reconnect button visible so users can re-consent to new scopes
     if (locked) {
         document.querySelectorAll('.sync-input, .sync-textarea').forEach(el => el.disabled = true);
         const saveBtn = document.getElementById('btn-sync-save');
         const removeBtn = document.getElementById('btn-sync-remove');
-        const connectBtn = document.getElementById('btn-sp-connect');
         if (saveBtn) saveBtn.style.display = 'none';
         if (removeBtn) removeBtn.style.display = 'none';
-        if (connectBtn) connectBtn.style.display = 'none';
     }
 
     updateSyncStatusDisplay(data);
@@ -755,10 +909,6 @@ function clearSyncFields() {
     if (connectBtn) connectBtn.style.display = '';
     const statusDisplay = document.getElementById('sync-status-display');
     if (statusDisplay) statusDisplay.style.display = 'none';
-    if (syncPollInterval) {
-        clearInterval(syncPollInterval);
-        syncPollInterval = null;
-    }
 }
 
 function updateSyncStatusDisplay(data) {
@@ -939,39 +1089,10 @@ async function triggerRemoteSync() {
         syncingFolders.add(targetPath);
         updateSyncStatusDisplay({ ...currentSyncSource, sync_status: 'syncing' });
         updateFolderSyncStatus('syncing', null);
-        pollSyncStatus(targetPath);
+        // No polling needed — WebSocket sync_status event will update the UI
     } catch (error) {
         showToast(error.message, 'error');
     }
-}
-
-function pollSyncStatus(folderPath) {
-    if (syncPollInterval) clearInterval(syncPollInterval);
-
-    syncPollInterval = setInterval(async () => {
-        try {
-            const response = await fetch(`/api/sync/${encodeURIComponent(folderPath)}/status`);
-            if (!response.ok) {
-                clearInterval(syncPollInterval);
-                syncPollInterval = null;
-                return;
-            }
-
-            const data = await response.json();
-            updateSyncStatusDisplay(data);
-            updateFolderSyncStatus(data.sync_status, data.last_synced_at);
-
-            if (data.sync_status !== 'syncing') {
-                clearInterval(syncPollInterval);
-                syncPollInterval = null;
-                syncingFolders.delete(folderPath);
-                refreshFileList();
-            }
-        } catch (error) {
-            clearInterval(syncPollInterval);
-            syncPollInterval = null;
-        }
-    }, 2000);
 }
 
 function updateSpConnectStatus(connected) {
@@ -1028,40 +1149,10 @@ async function connectSharePoint() {
         window.open(data.auth_url, '_blank');
 
         showToast('Sign in to Microsoft in the new tab. This page will update when done.', 'info');
-
-        // Poll for connection status
-        pollSpConnectStatus(targetPath);
+        // No polling needed — WebSocket sp_connected event will update the UI
     } catch (error) {
         showToast(error.message, 'error');
     }
-}
-
-let spConnectPollInterval = null;
-
-function pollSpConnectStatus(folderPath) {
-    if (spConnectPollInterval) clearInterval(spConnectPollInterval);
-
-    spConnectPollInterval = setInterval(async () => {
-        try {
-            const resp = await fetch(`/api/sync/${encodeURIComponent(folderPath)}`);
-            if (!resp.ok) {
-                clearInterval(spConnectPollInterval);
-                spConnectPollInterval = null;
-                return;
-            }
-            const data = await resp.json();
-            if (data && data.sharepoint && data.sharepoint.connected) {
-                clearInterval(spConnectPollInterval);
-                spConnectPollInterval = null;
-                updateSpConnectStatus(true);
-                currentSyncSource = data;
-                showToast('SharePoint connected successfully', 'success');
-            }
-        } catch (error) {
-            clearInterval(spConnectPollInterval);
-            spConnectPollInterval = null;
-        }
-    }, 2000);
 }
 
 async function loadSyncSource(folderPath) {

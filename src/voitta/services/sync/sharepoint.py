@@ -12,7 +12,7 @@ from .base import BaseSyncConnector, RemoteFile
 logger = logging.getLogger(__name__)
 
 # Scopes needed for delegated access
-SHAREPOINT_SCOPES = "offline_access Sites.Read.All Files.Read.All"
+SHAREPOINT_SCOPES = "offline_access Sites.Read.All Files.Read.All OnlineMeetings.Read OnlineMeetingTranscript.Read.All"
 
 
 def _parse_sharepoint_url(url: str) -> tuple[str, str, str]:
@@ -251,6 +251,12 @@ class SharePointConnector(BaseSyncConnector):
                     )
 
             url = data.get("@odata.nextLink")
+
+    async def sync(self, source, fs, keep_extensions: set[str] | None = None) -> dict:
+        """Sync with .vtt files preserved across mirror deletions."""
+        keep = keep_extensions or set()
+        keep.add(".vtt")
+        return await super().sync(source, fs, keep_extensions=keep)
 
     async def download_file(self, source, remote_path: str, local_path: Path) -> None:
         token = await self._get_access_token(source)

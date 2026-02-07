@@ -1,11 +1,10 @@
 """WebSocket routes for real-time updates."""
 
 import asyncio
-import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ...services.watcher import file_watcher
+from ...services.watcher import FileEvent, file_watcher
 
 router = APIRouter()
 
@@ -24,15 +23,18 @@ async def websocket_endpoint(websocket: WebSocket):
                 # Wait for an event with timeout to allow checking connection
                 event = await asyncio.wait_for(queue.get(), timeout=30.0)
 
-                # Send event to client
-                await websocket.send_json(
-                    {
-                        "type": event.event_type.value,
-                        "path": event.path,
-                        "is_dir": event.is_dir,
-                        "dest_path": event.dest_path,
-                    }
-                )
+                # Handle both FileEvent objects and plain dict events
+                if isinstance(event, dict):
+                    await websocket.send_json(event)
+                elif isinstance(event, FileEvent):
+                    await websocket.send_json(
+                        {
+                            "type": event.event_type.value,
+                            "path": event.path,
+                            "is_dir": event.is_dir,
+                            "dest_path": event.dest_path,
+                        }
+                    )
             except asyncio.TimeoutError:
                 # Send ping to keep connection alive
                 try:

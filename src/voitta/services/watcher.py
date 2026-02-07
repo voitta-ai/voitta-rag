@@ -147,7 +147,7 @@ class FileWatcher:
         # Clean up dead queues
         self._subscribers -= dead_queues
 
-    async def _broadcast(self, data: dict[str, Any]) -> None:
+    async def broadcast(self, data: dict[str, Any]) -> None:
         """Broadcast a dictionary event to all subscribers."""
         dead_queues = set()
         for queue in self._subscribers:
@@ -170,6 +170,12 @@ class FileWatcher:
     def unsubscribe(self, queue: asyncio.Queue):
         """Unsubscribe from filesystem events."""
         self._subscribers.discard(queue)
+
+    def broadcast_event(self, data: dict[str, Any]) -> None:
+        """Broadcast a dict event from any context (sync or async)."""
+        if self._loop is None or not self._subscribers:
+            return
+        asyncio.run_coroutine_threadsafe(self.broadcast(data), self._loop)
 
     def start(self, loop: asyncio.AbstractEventLoop):
         """Start watching the filesystem."""
