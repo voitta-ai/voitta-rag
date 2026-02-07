@@ -32,7 +32,7 @@ class BaseSyncConnector(ABC):
         """Download a single file from remote to local_path."""
         ...
 
-    async def sync(self, source, fs) -> dict:
+    async def sync(self, source, fs, keep_extensions: set[str] | None = None) -> dict:
         """Perform a full mirror sync.
 
         1. List all remote files.
@@ -74,8 +74,11 @@ class BaseSyncConnector(ABC):
                 stats["errors"] += 1
 
         # Delete local files not on remote (mirror)
+        _keep = keep_extensions or set()
         for local_file in local_root.rglob("*"):
             if local_file.is_file() and not local_file.name.startswith("."):
+                if local_file.suffix.lower() in _keep:
+                    continue
                 rel = str(local_file.relative_to(local_root))
                 if rel not in remote_paths:
                     try:

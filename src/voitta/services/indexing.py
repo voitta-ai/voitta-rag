@@ -28,7 +28,7 @@ idx_logger.setLevel(logging.DEBUG)
 for handler in idx_logger.handlers[:]:
     idx_logger.removeHandler(handler)
 
-_file_handler = logging.FileHandler(LOG_FILE, mode='a', encoding='utf-8')
+_file_handler = logging.FileHandler(LOG_FILE, mode='w', encoding='utf-8')
 _file_handler.setLevel(logging.DEBUG)
 _file_handler.setFormatter(logging.Formatter(
     '%(asctime)s.%(msecs)03d | %(levelname)-7s | %(message)s',

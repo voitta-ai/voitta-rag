@@ -23,7 +23,7 @@ def get_async_engine() -> AsyncEngine:
     settings = get_settings()
     return create_async_engine(
         settings.database_url,
-        echo=settings.debug,
+        echo=False,
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
@@ -35,7 +35,7 @@ def get_sync_engine() -> Engine:
     settings = get_settings()
     return create_engine(
         settings.sync_database_url,
-        echo=settings.debug,
+        echo=False,
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )

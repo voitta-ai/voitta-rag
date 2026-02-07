@@ -3,8 +3,6 @@
 import asyncio
 import logging
 import threading
-import time
-from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -85,6 +83,9 @@ class IndexingWorker:
                 folder_path = folder_status.folder_path
                 logger.info(f"Starting indexing for folder: {folder_path}")
 
+                # Broadcast indexing started via WebSocket
+                self._notify_indexing_status(folder_path, "indexing")
+
                 try:
                     files_indexed, total_chunks, files_skipped = indexing_service.index_folder(
                         folder_path, db, force=False
@@ -95,9 +96,7 @@ class IndexingWorker:
                         f"{files_indexed} files, {total_chunks} chunks, {files_skipped} skipped"
                     )
 
-                    # Notify via WebSocket if available
-                    if self._loop:
-                        self._notify_indexing_complete(folder_path, files_indexed, total_chunks)
+                    self._notify_indexing_complete(folder_path, files_indexed, total_chunks)
 
                 except Exception as e:
                     db.rollback()
@@ -111,6 +110,21 @@ class IndexingWorker:
                     except Exception:
                         db.rollback()
 
+                    self._notify_indexing_status(folder_path, "error")
+
+    def _notify_indexing_status(self, folder_path: str, status: str) -> None:
+        """Send WebSocket notification about indexing status change."""
+        try:
+            from .watcher import file_watcher
+
+            file_watcher.broadcast_event({
+                "type": "index_status",
+                "path": folder_path,
+                "status": status,
+            })
+        except Exception as e:
+            logger.debug(f"Could not send indexing notification: {e}")
+
     def _notify_indexing_complete(
         self, folder_path: str, files_indexed: int, total_chunks: int
     ) -> None:
@@ -118,17 +132,12 @@ class IndexingWorker:
         try:
             from .watcher import file_watcher
 
-            if file_watcher._loop and file_watcher._subscribers:
-                event = {
-                    "type": "index_complete",
-                    "folder_path": folder_path,
-                    "files_indexed": files_indexed,
-                    "total_chunks": total_chunks,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
-                asyncio.run_coroutine_threadsafe(
-                    file_watcher._broadcast(event), file_watcher._loop
-                )
+            file_watcher.broadcast_event({
+                "type": "index_complete",
+                "path": folder_path,
+                "files_indexed": files_indexed,
+                "total_chunks": total_chunks,
+            })
         except Exception as e:
             logger.debug(f"Could not send indexing notification: {e}")
 

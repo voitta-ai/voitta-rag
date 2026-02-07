@@ -165,6 +165,13 @@ async def sharepoint_oauth_callback(
 
         source.sp_refresh_token = tokens["refresh_token"]
 
+    # Broadcast connection status via WebSocket
+    from ...services.watcher import file_watcher
+    await file_watcher.broadcast({
+        "type": "sp_connected",
+        "path": folder_path,
+    })
+
     # Redirect back to the folder's browse page
     browse_path = f"/browse/{folder_path}" if folder_path else "/browse"
     return RedirectResponse(url=browse_path, status_code=302)
@@ -370,6 +377,7 @@ async def delete_sync_source(path: str, user: CurrentUser, db: DB):
 async def _run_sync(folder_path: str):
     """Run sync in background."""
     from ...services.filesystem import FilesystemService
+    from ...services.watcher import file_watcher
 
     async with get_db_context() as db:
         result = await db.execute(
@@ -383,6 +391,18 @@ async def _run_sync(folder_path: str):
             connector = get_connector(source.source_type)
             fs = FilesystemService()
             await connector.sync(source, fs)
+
+            # Post-sync: fetch Teams meeting transcripts for SharePoint sources
+            if source.source_type == "sharepoint":
+                try:
+                    from ...services.sync.teams_transcripts import fetch_transcripts_for_folder
+                    token = await connector._get_access_token(source)
+                    count = await fetch_transcripts_for_folder(source, fs, token)
+                    if count:
+                        logger.info("Fetched %d transcript(s) for %s", count, folder_path)
+                except Exception as e:
+                    logger.warning("Transcript fetch failed for %s: %s", folder_path, e)
+
             source.sync_status = "synced"
             source.sync_error = None
             source.last_synced_at = utc_now()
@@ -390,3 +410,12 @@ async def _run_sync(folder_path: str):
             logger.exception("Sync failed for %s", folder_path)
             source.sync_status = "error"
             source.sync_error = str(e)
+
+        # Broadcast sync status change via WebSocket
+        await file_watcher.broadcast({
+            "type": "sync_status",
+            "path": folder_path,
+            "sync_status": source.sync_status,
+            "sync_error": source.sync_error,
+            "last_synced_at": source.last_synced_at.isoformat() if source.last_synced_at else None,
+        })

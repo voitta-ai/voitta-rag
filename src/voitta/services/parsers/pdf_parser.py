@@ -25,7 +25,7 @@ pdf_logger.setLevel(logging.DEBUG)
 for handler in pdf_logger.handlers[:]:
     pdf_logger.removeHandler(handler)
 
-file_handler = logging.FileHandler(LOG_FILE, mode='a', encoding='utf-8')
+file_handler = logging.FileHandler(LOG_FILE, mode='w', encoding='utf-8')
 file_handler.setLevel(logging.DEBUG)
 file_handler.setFormatter(logging.Formatter(
     '%(asctime)s.%(msecs)03d | %(levelname)-7s | %(message)s',

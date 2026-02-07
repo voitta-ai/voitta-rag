@@ -10,6 +10,105 @@ from ...db.models import FolderIndexStatus, FolderSyncSource, IndexedFile, User,
 router = APIRouter()
 
 
+async def _gather_file_list_data(path: str, user, fs, db):
+    """Gather all data needed to render the file list items."""
+    items = fs.list_directory(path)
+
+    folder_paths = [item.path for item in items if item.is_dir]
+
+    # Get search_active status for all folders in the listing (per user)
+    folder_search_states = {}
+    if folder_paths:
+        result = await db.execute(
+            select(UserFolderSetting).where(
+                UserFolderSetting.user_id == user.id,
+                UserFolderSetting.folder_path.in_(folder_paths),
+            )
+        )
+        for setting in result.scalars().all():
+            folder_search_states[setting.folder_path] = setting.search_active
+
+    # Get index status for all folders in the listing
+    index_statuses = {}
+    folder_stats = {}
+    if folder_paths:
+        result = await db.execute(
+            select(FolderIndexStatus).where(FolderIndexStatus.folder_path.in_(folder_paths))
+        )
+        for status in result.scalars().all():
+            index_statuses[status.folder_path] = status.status
+
+        # Get folder stats from indexed_files
+        current_prefix = (path + "/") if path else ""
+        result = await db.execute(
+            select(IndexedFile.file_path, IndexedFile.chunk_count, IndexedFile.file_size).where(
+                IndexedFile.file_path.like(current_prefix + "%")
+            )
+        )
+        folder_paths_set = {fp + "/" for fp in folder_paths}
+        for file_path, chunk_count, file_size in result.all():
+            for fp_prefix in folder_paths_set:
+                if file_path.startswith(fp_prefix):
+                    folder_key = fp_prefix[:-1]
+                    if folder_key not in folder_stats:
+                        folder_stats[folder_key] = {"indexed_files": 0, "total_chunks": 0, "total_size": 0}
+                    folder_stats[folder_key]["indexed_files"] += 1
+                    folder_stats[folder_key]["total_chunks"] += chunk_count
+                    folder_stats[folder_key]["total_size"] += file_size
+                    break
+
+    # Get index status for files
+    file_paths = [item.path for item in items if not item.is_dir]
+    file_index_statuses = {}
+    if file_paths:
+        result = await db.execute(
+            select(IndexedFile.file_path, IndexedFile.chunk_count, IndexedFile.indexed_at).where(
+                IndexedFile.file_path.in_(file_paths)
+            )
+        )
+        for row in result.all():
+            file_index_statuses[row[0]] = {
+                "status": "indexed",
+                "chunk_count": row[1],
+                "indexed_at": row[2].isoformat() if row[2] else None,
+            }
+
+    # Get sync source types for folders
+    folder_sync_types = {}
+    if folder_paths:
+        result = await db.execute(
+            select(FolderSyncSource.folder_path, FolderSyncSource.source_type).where(
+                FolderSyncSource.folder_path.in_(folder_paths)
+            )
+        )
+        for row in result.all():
+            folder_sync_types[row[0]] = row[1]
+
+    # Check if current folder (or ancestor) is a sync source
+    current_sync_type = None
+    if path:
+        parts = path.split("/")
+        ancestor_paths = ["/".join(parts[:i+1]) for i in range(len(parts))]
+        result = await db.execute(
+            select(FolderSyncSource.source_type).where(
+                FolderSyncSource.folder_path.in_(ancestor_paths)
+            ).limit(1)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            current_sync_type = row
+
+    return {
+        "items": items,
+        "index_statuses": index_statuses,
+        "folder_stats": folder_stats,
+        "file_index_statuses": file_index_statuses,
+        "folder_search_states": folder_search_states,
+        "folder_sync_types": folder_sync_types,
+        "current_sync_type": current_sync_type,
+    }
+
+
 def get_templates(request: Request):
     """Get Jinja2 templates from app state."""
     return request.app.state.templates
@@ -78,7 +177,6 @@ async def browse(
 ):
     """File browser page."""
     try:
-        items = fs.list_directory(path)
         breadcrumbs = fs.get_breadcrumbs(path)
         current_info = fs.get_info(path, calculate_dir_size=False) if path else None
     except FileNotFoundError:
@@ -108,93 +206,8 @@ async def browse(
         folder_enabled = setting.enabled if setting else False
         folder_search_active = setting.search_active if setting else False
 
-    # Get folder paths for listing queries
-    folder_paths = [item.path for item in items if item.is_dir]
-
-    # Get search_active status for all folders in the listing (per user)
-    folder_search_states = {}
-    if folder_paths:
-        result = await db.execute(
-            select(UserFolderSetting).where(
-                UserFolderSetting.user_id == user.id,
-                UserFolderSetting.folder_path.in_(folder_paths),
-            )
-        )
-        for setting in result.scalars().all():
-            folder_search_states[setting.folder_path] = setting.search_active
-
-    # Get index status for all folders in the listing
-    index_statuses = {}
-    folder_stats = {}
-    if folder_paths:
-        result = await db.execute(
-            select(FolderIndexStatus).where(FolderIndexStatus.folder_path.in_(folder_paths))
-        )
-        for status in result.scalars().all():
-            index_statuses[status.folder_path] = status.status
-
-        # Get folder stats from indexed_files in a single query
-        # Fetch all indexed files under the current path, then group by folder in Python
-        current_prefix = (path + "/") if path else ""
-        result = await db.execute(
-            select(IndexedFile.file_path, IndexedFile.chunk_count, IndexedFile.file_size).where(
-                IndexedFile.file_path.like(current_prefix + "%")
-            )
-        )
-        folder_paths_set = {fp + "/" for fp in folder_paths}
-        for file_path, chunk_count, file_size in result.all():
-            # Find which listed folder this file belongs to
-            for fp_prefix in folder_paths_set:
-                if file_path.startswith(fp_prefix):
-                    folder_key = fp_prefix[:-1]  # strip trailing /
-                    if folder_key not in folder_stats:
-                        folder_stats[folder_key] = {"indexed_files": 0, "total_chunks": 0, "total_size": 0}
-                    folder_stats[folder_key]["indexed_files"] += 1
-                    folder_stats[folder_key]["total_chunks"] += chunk_count
-                    folder_stats[folder_key]["total_size"] += file_size
-                    break
-
-    # Get index status for all files in the listing (from indexed_files table)
-    file_paths = [item.path for item in items if not item.is_dir]
-    file_index_statuses = {}
-    if file_paths:
-        result = await db.execute(
-            select(IndexedFile.file_path, IndexedFile.chunk_count, IndexedFile.indexed_at).where(
-                IndexedFile.file_path.in_(file_paths)
-            )
-        )
-        for row in result.all():
-            file_index_statuses[row[0]] = {
-                "status": "indexed",
-                "chunk_count": row[1],
-                "indexed_at": row[2].isoformat() if row[2] else None,
-            }
-
-    # Get sync source types for folders in the listing
-    folder_sync_types = {}
-    if folder_paths:
-        result = await db.execute(
-            select(FolderSyncSource.folder_path, FolderSyncSource.source_type).where(
-                FolderSyncSource.folder_path.in_(folder_paths)
-            )
-        )
-        for row in result.all():
-            folder_sync_types[row[0]] = row[1]
-
-    # Check if current folder (or an ancestor) is a sync source
-    current_sync_type = None
-    if path:
-        # Build ancestor paths: "a/b/c" -> ["a/b/c", "a/b", "a"]
-        parts = path.split("/")
-        ancestor_paths = ["/".join(parts[:i+1]) for i in range(len(parts))]
-        result = await db.execute(
-            select(FolderSyncSource.source_type).where(
-                FolderSyncSource.folder_path.in_(ancestor_paths)
-            ).limit(1)
-        )
-        row = result.scalar_one_or_none()
-        if row:
-            current_sync_type = row
+    # Gather file list data using shared helper
+    file_list_data = await _gather_file_list_data(path, user, fs, db)
 
     # Also get current folder's index status
     current_index_status = None
@@ -211,7 +224,6 @@ async def browse(
         "browser.html",
         {
             "user": user,
-            "items": items,
             "breadcrumbs": breadcrumbs,
             "current_path": path,
             "current_info": current_info,
@@ -219,12 +231,30 @@ async def browse(
             "metadata_user": metadata_user,
             "folder_enabled": folder_enabled,
             "folder_search_active": folder_search_active,
-            "folder_search_states": folder_search_states,
-            "index_statuses": index_statuses,
-            "folder_stats": folder_stats,
-            "file_index_statuses": file_index_statuses,
-            "folder_sync_types": folder_sync_types,
-            "current_sync_type": current_sync_type,
             "current_index_status": current_index_status,
+            **file_list_data,
         },
+    )
+
+
+@router.get("/api/browse-list/{path:path}", response_class=HTMLResponse)
+@router.get("/api/browse-list", response_class=HTMLResponse)
+async def browse_list(
+    request: Request,
+    user: CurrentUser,
+    fs: Filesystem,
+    db: DB,
+    path: str = "",
+):
+    """Return rendered HTML fragment for file list items (AJAX refresh)."""
+    try:
+        file_list_data = await _gather_file_list_data(path, user, fs, db)
+    except (FileNotFoundError, NotADirectoryError):
+        return HTMLResponse("")
+
+    templates = get_templates(request)
+    return templates.TemplateResponse(
+        request,
+        "_file_list_items.html",
+        file_list_data,
     )

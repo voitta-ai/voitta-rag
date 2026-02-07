@@ -10,6 +10,7 @@ from .pptx_parser import PptxParser
 from .text_parser import TextParser
 from .xlsx_parser import XlsxParser
 from .odf_parser import OdpParser, OdtParser, OdsParser
+from .vtt_parser import VttParser
 
 
 class ParserRegistry:
@@ -76,6 +77,7 @@ def get_registry() -> ParserRegistry:
         _default_registry.register(OdpParser())
         _default_registry.register(OdtParser())
         _default_registry.register(OdsParser())
+        _default_registry.register(VttParser())
     return _default_registry
 
 
