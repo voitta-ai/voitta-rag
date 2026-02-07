@@ -77,25 +77,31 @@ function initWebSocket() {
 }
 
 function handleFileSystemEvent(event) {
-    // Show toast notification
-    let message = '';
-    switch (event.type) {
-        case 'created':
-            message = `${event.is_dir ? 'Folder' : 'File'} created: ${event.path}`;
-            break;
-        case 'deleted':
-            message = `${event.is_dir ? 'Folder' : 'File'} deleted: ${event.path}`;
-            break;
-        case 'modified':
-            message = `File modified: ${event.path}`;
-            break;
-        case 'moved':
-            message = `Moved: ${event.path} → ${event.dest_path}`;
-            break;
-    }
+    // Suppress notifications for files inside syncing folders
+    const inSyncingFolder = [...syncingFolders].some(
+        folder => event.path === folder || event.path.startsWith(folder + '/')
+    );
 
-    if (message) {
-        showToast(message, 'info');
+    if (!inSyncingFolder) {
+        let message = '';
+        switch (event.type) {
+            case 'created':
+                message = `${event.is_dir ? 'Folder' : 'File'} created: ${event.path}`;
+                break;
+            case 'deleted':
+                message = `${event.is_dir ? 'Folder' : 'File'} deleted: ${event.path}`;
+                break;
+            case 'modified':
+                message = `File modified: ${event.path}`;
+                break;
+            case 'moved':
+                message = `Moved: ${event.path} → ${event.dest_path}`;
+                break;
+        }
+
+        if (message) {
+            showToast(message, 'info');
+        }
     }
 
     // Refresh file list if we're in the affected directory
@@ -336,6 +342,22 @@ function updateSidebar(details) {
         metadataInfo.textContent = details.metadata_updated_by
             ? `Last updated by ${details.metadata_updated_by}`
             : '';
+    }
+
+    // Update folder sync status in properties card
+    updateFolderSyncStatus(details.sync_status, details.last_synced_at);
+
+    // Show/hide sync source section
+    currentFolderIsEmpty = details.is_empty;
+    const syncSection = document.getElementById('sync-source-section');
+    if (syncSection) {
+        if (details.is_dir && (details.sync_source_type || details.is_empty)) {
+            syncSection.style.display = 'block';
+            loadSyncSource(details.path);
+        } else {
+            syncSection.style.display = 'none';
+            clearSyncFields();
+        }
     }
 
     // Update indexing stats section (folders only)
@@ -647,6 +669,415 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+// ============================================
+// Remote Sync
+// ============================================
+
+let currentSyncSource = null;
+let syncPollInterval = null;
+let syncingFolders = new Set();
+let currentFolderIsEmpty = true;
+
+function onSyncSourceTypeChange(value) {
+    document.querySelectorAll('.sync-fields').forEach(el => el.style.display = 'none');
+
+    if (value) {
+        const fields = document.getElementById(`sync-fields-${value}`);
+        if (fields) fields.style.display = 'block';
+        document.getElementById('sync-actions').style.display = 'flex';
+    } else {
+        document.getElementById('sync-actions').style.display =
+            currentSyncSource ? 'flex' : 'none';
+    }
+}
+
+function populateSyncFields(data) {
+    currentSyncSource = data;
+    const locked = data.source_type && !currentFolderIsEmpty;
+
+    const select = document.getElementById('sync-source-type');
+    select.value = data.source_type || '';
+    select.disabled = locked;
+    onSyncSourceTypeChange(data.source_type || '');
+
+    if (data.source_type === 'sharepoint' && data.sharepoint) {
+        document.getElementById('sp-tenant-id').value = data.sharepoint.tenant_id || '';
+        document.getElementById('sp-client-id').value = data.sharepoint.client_id || '';
+        document.getElementById('sp-client-secret').value = data.sharepoint.client_secret || '';
+        document.getElementById('sp-site-url').value = data.sharepoint.site_url || '';
+        document.getElementById('sp-drive-id').value = data.sharepoint.drive_id || '';
+        updateSpConnectStatus(data.sharepoint.connected);
+    } else if (data.source_type === 'google_drive' && data.google_drive) {
+        document.getElementById('gd-service-account-json').value = data.google_drive.service_account_json || '';
+        document.getElementById('gd-folder-id').value = data.google_drive.folder_id || '';
+    } else if (data.source_type === 'github' && data.github) {
+        document.getElementById('gh-token').value = data.github.token || '';
+        document.getElementById('gh-repo').value = data.github.repo || '';
+        document.getElementById('gh-branch').value = data.github.branch || 'main';
+        document.getElementById('gh-path').value = data.github.path || '';
+    }
+
+    // Lock inputs and hide save/remove/connect when folder has synced content
+    if (locked) {
+        document.querySelectorAll('.sync-input, .sync-textarea').forEach(el => el.disabled = true);
+        const saveBtn = document.getElementById('btn-sync-save');
+        const removeBtn = document.getElementById('btn-sync-remove');
+        const connectBtn = document.getElementById('btn-sp-connect');
+        if (saveBtn) saveBtn.style.display = 'none';
+        if (removeBtn) removeBtn.style.display = 'none';
+        if (connectBtn) connectBtn.style.display = 'none';
+    }
+
+    updateSyncStatusDisplay(data);
+}
+
+function clearSyncFields() {
+    currentSyncSource = null;
+    const select = document.getElementById('sync-source-type');
+    if (select) {
+        select.value = '';
+        select.disabled = false;
+    }
+    document.querySelectorAll('.sync-fields').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('.sync-input, .sync-textarea').forEach(el => {
+        el.value = '';
+        el.disabled = false;
+    });
+    const actions = document.getElementById('sync-actions');
+    if (actions) actions.style.display = 'none';
+    const saveBtn = document.getElementById('btn-sync-save');
+    const removeBtn = document.getElementById('btn-sync-remove');
+    if (saveBtn) saveBtn.style.display = '';
+    if (removeBtn) removeBtn.style.display = '';
+    const connectBtn = document.getElementById('btn-sp-connect');
+    if (connectBtn) connectBtn.style.display = '';
+    const statusDisplay = document.getElementById('sync-status-display');
+    if (statusDisplay) statusDisplay.style.display = 'none';
+    if (syncPollInterval) {
+        clearInterval(syncPollInterval);
+        syncPollInterval = null;
+    }
+}
+
+function updateSyncStatusDisplay(data) {
+    const display = document.getElementById('sync-status-display');
+    const statusValue = document.getElementById('sync-status-value');
+    const lastSynced = document.getElementById('sync-last-synced');
+
+    if (!data || !data.source_type) {
+        if (display) display.style.display = 'none';
+        return;
+    }
+
+    if (display) display.style.display = 'flex';
+
+    const statusLabels = {
+        'idle': 'Idle',
+        'syncing': 'Syncing...',
+        'synced': 'Synced',
+        'error': 'Error',
+    };
+    if (statusValue) {
+        statusValue.textContent = statusLabels[data.sync_status] || data.sync_status;
+        statusValue.className = `sync-status-value sync-status-${data.sync_status}`;
+    }
+
+    if (lastSynced) {
+        if (data.last_synced_at) {
+            const d = new Date(data.last_synced_at);
+            lastSynced.textContent = `Last: ${d.toLocaleString()}`;
+        } else {
+            lastSynced.textContent = 'Never synced';
+        }
+    }
+
+    const syncBtn = document.getElementById('btn-sync-trigger');
+    if (syncBtn) {
+        syncBtn.disabled = data.sync_status === 'syncing';
+    }
+}
+
+function updateFolderSyncStatus(syncStatus, lastSyncedAt) {
+    const row = document.getElementById('folder-sync-status-row');
+    const value = document.getElementById('folder-sync-status-value');
+    const lastSynced = document.getElementById('folder-sync-last-synced');
+    if (!row) return;
+
+    if (!syncStatus) {
+        row.style.display = 'none';
+        return;
+    }
+
+    row.style.display = 'flex';
+
+    const labels = {
+        'idle': 'Idle',
+        'syncing': 'Syncing...',
+        'synced': 'Synced',
+        'error': 'Error',
+    };
+    if (value) {
+        value.textContent = labels[syncStatus] || syncStatus;
+        value.className = `sync-status-value sync-status-${syncStatus}`;
+    }
+    if (lastSynced) {
+        if (lastSyncedAt) {
+            const d = new Date(lastSyncedAt);
+            lastSynced.textContent = `Last: ${d.toLocaleString()}`;
+        } else {
+            lastSynced.textContent = '';
+        }
+    }
+}
+
+function gatherSyncConfig() {
+    const sourceType = document.getElementById('sync-source-type').value;
+    if (!sourceType) return null;
+
+    const config = { source_type: sourceType };
+
+    if (sourceType === 'sharepoint') {
+        config.sharepoint = {
+            tenant_id: document.getElementById('sp-tenant-id').value.trim(),
+            client_id: document.getElementById('sp-client-id').value.trim(),
+            client_secret: document.getElementById('sp-client-secret').value.trim(),
+            site_url: document.getElementById('sp-site-url').value.trim(),
+            drive_id: document.getElementById('sp-drive-id').value.trim(),
+        };
+    } else if (sourceType === 'google_drive') {
+        config.google_drive = {
+            service_account_json: document.getElementById('gd-service-account-json').value.trim(),
+            folder_id: document.getElementById('gd-folder-id').value.trim(),
+        };
+    } else if (sourceType === 'github') {
+        config.github = {
+            token: document.getElementById('gh-token').value.trim(),
+            repo: document.getElementById('gh-repo').value.trim(),
+            branch: document.getElementById('gh-branch').value.trim() || 'main',
+            path: document.getElementById('gh-path').value.trim(),
+        };
+    }
+
+    return config;
+}
+
+async function saveSyncSource() {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) {
+        showToast('No folder selected', 'error');
+        return;
+    }
+
+    const config = gatherSyncConfig();
+    if (!config) {
+        showToast('Select a sync source type', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/sync/${encodeURIComponent(targetPath)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to save sync source');
+        }
+
+        const data = await response.json();
+        currentSyncSource = data;
+        updateSyncStatusDisplay(data);
+        showToast('Sync source saved', 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+async function removeSyncSource() {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) return;
+
+    try {
+        const response = await fetch(`/api/sync/${encodeURIComponent(targetPath)}`, {
+            method: 'DELETE',
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to remove sync source');
+        }
+
+        clearSyncFields();
+        updateFolderSyncStatus(null, null);
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+async function triggerRemoteSync() {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) {
+        showToast('No folder selected', 'error');
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/sync/${encodeURIComponent(targetPath)}/trigger`, {
+            method: 'POST',
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            throw new Error(result.detail || 'Failed to trigger sync');
+        }
+
+        syncingFolders.add(targetPath);
+        updateSyncStatusDisplay({ ...currentSyncSource, sync_status: 'syncing' });
+        updateFolderSyncStatus('syncing', null);
+        pollSyncStatus(targetPath);
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+function pollSyncStatus(folderPath) {
+    if (syncPollInterval) clearInterval(syncPollInterval);
+
+    syncPollInterval = setInterval(async () => {
+        try {
+            const response = await fetch(`/api/sync/${encodeURIComponent(folderPath)}/status`);
+            if (!response.ok) {
+                clearInterval(syncPollInterval);
+                syncPollInterval = null;
+                return;
+            }
+
+            const data = await response.json();
+            updateSyncStatusDisplay(data);
+            updateFolderSyncStatus(data.sync_status, data.last_synced_at);
+
+            if (data.sync_status !== 'syncing') {
+                clearInterval(syncPollInterval);
+                syncPollInterval = null;
+                syncingFolders.delete(folderPath);
+                refreshFileList();
+            }
+        } catch (error) {
+            clearInterval(syncPollInterval);
+            syncPollInterval = null;
+        }
+    }, 2000);
+}
+
+function updateSpConnectStatus(connected) {
+    const el = document.getElementById('sp-connect-status');
+    const btn = document.getElementById('btn-sp-connect');
+    if (!el) return;
+
+    if (connected) {
+        el.className = 'sp-connect-status connected';
+        el.textContent = 'Connected';
+        if (btn) btn.textContent = 'Reconnect';
+    } else {
+        el.className = 'sp-connect-status not-connected';
+        el.textContent = 'Not connected';
+        if (btn) btn.textContent = 'Connect';
+    }
+}
+
+async function connectSharePoint() {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) {
+        showToast('No folder selected', 'error');
+        return;
+    }
+
+    // First save the current config
+    const config = gatherSyncConfig();
+    if (!config) {
+        showToast('Select SharePoint and fill in the fields first', 'error');
+        return;
+    }
+
+    try {
+        // Save config first
+        const saveResp = await fetch(`/api/sync/${encodeURIComponent(targetPath)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        });
+        if (!saveResp.ok) {
+            const error = await saveResp.json();
+            throw new Error(error.detail || 'Failed to save config');
+        }
+
+        // Get the auth URL
+        const resp = await fetch(`/api/sync/sharepoint/auth?folder_path=${encodeURIComponent(targetPath)}`);
+        if (!resp.ok) {
+            const error = await resp.json();
+            throw new Error(error.detail || 'Failed to start SharePoint auth');
+        }
+
+        const data = await resp.json();
+        // Open Microsoft login in a new tab
+        window.open(data.auth_url, '_blank');
+
+        showToast('Sign in to Microsoft in the new tab. This page will update when done.', 'info');
+
+        // Poll for connection status
+        pollSpConnectStatus(targetPath);
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+let spConnectPollInterval = null;
+
+function pollSpConnectStatus(folderPath) {
+    if (spConnectPollInterval) clearInterval(spConnectPollInterval);
+
+    spConnectPollInterval = setInterval(async () => {
+        try {
+            const resp = await fetch(`/api/sync/${encodeURIComponent(folderPath)}`);
+            if (!resp.ok) {
+                clearInterval(spConnectPollInterval);
+                spConnectPollInterval = null;
+                return;
+            }
+            const data = await resp.json();
+            if (data && data.sharepoint && data.sharepoint.connected) {
+                clearInterval(spConnectPollInterval);
+                spConnectPollInterval = null;
+                updateSpConnectStatus(true);
+                currentSyncSource = data;
+                showToast('SharePoint connected successfully', 'success');
+            }
+        } catch (error) {
+            clearInterval(spConnectPollInterval);
+            spConnectPollInterval = null;
+        }
+    }, 2000);
+}
+
+async function loadSyncSource(folderPath) {
+    try {
+        const response = await fetch(`/api/sync/${encodeURIComponent(folderPath)}`);
+        if (response.ok) {
+            const data = await response.json();
+            if (data && data.source_type) {
+                populateSyncFields(data);
+                return;
+            }
+        }
+    } catch (error) {
+        // No sync source configured
+    }
+    clearSyncFields();
 }
 
 // ============================================

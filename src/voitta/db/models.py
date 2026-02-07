@@ -87,6 +87,46 @@ class FolderIndexStatus(Base):
     )
 
 
+class FolderSyncSource(Base):
+    """Remote sync source configuration for a folder."""
+
+    __tablename__ = "folder_sync_sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    folder_path: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False, index=True)
+    # source_type: "sharepoint", "google_drive", "github"
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False)
+
+    # SharePoint credentials
+    sp_tenant_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sp_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sp_client_secret: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    sp_site_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    sp_drive_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    sp_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Google Drive credentials
+    gd_service_account_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    gd_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # GitHub credentials
+    gh_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gh_repo: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    gh_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    gh_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    # Sync status tracking
+    sync_status: Mapped[str] = mapped_column(String(20), default="idle")
+    sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
 class IndexedFile(Base):
     """Track indexed files with their content hash for change detection."""
 

@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 
 from ..deps import DB, CurrentUser, Filesystem, Metadata, OptionalUser
-from ...db.models import FolderIndexStatus, IndexedFile, User, UserFolderSetting
+from ...db.models import FolderIndexStatus, FolderSyncSource, IndexedFile, User, UserFolderSetting
 
 router = APIRouter()
 
@@ -137,20 +137,21 @@ async def browse(
         # Fetch all indexed files under the current path, then group by folder in Python
         current_prefix = (path + "/") if path else ""
         result = await db.execute(
-            select(IndexedFile.file_path, IndexedFile.chunk_count).where(
+            select(IndexedFile.file_path, IndexedFile.chunk_count, IndexedFile.file_size).where(
                 IndexedFile.file_path.like(current_prefix + "%")
             )
         )
         folder_paths_set = {fp + "/" for fp in folder_paths}
-        for file_path, chunk_count in result.all():
+        for file_path, chunk_count, file_size in result.all():
             # Find which listed folder this file belongs to
             for fp_prefix in folder_paths_set:
                 if file_path.startswith(fp_prefix):
                     folder_key = fp_prefix[:-1]  # strip trailing /
                     if folder_key not in folder_stats:
-                        folder_stats[folder_key] = {"indexed_files": 0, "total_chunks": 0}
+                        folder_stats[folder_key] = {"indexed_files": 0, "total_chunks": 0, "total_size": 0}
                     folder_stats[folder_key]["indexed_files"] += 1
                     folder_stats[folder_key]["total_chunks"] += chunk_count
+                    folder_stats[folder_key]["total_size"] += file_size
                     break
 
     # Get index status for all files in the listing (from indexed_files table)
@@ -168,6 +169,32 @@ async def browse(
                 "chunk_count": row[1],
                 "indexed_at": row[2].isoformat() if row[2] else None,
             }
+
+    # Get sync source types for folders in the listing
+    folder_sync_types = {}
+    if folder_paths:
+        result = await db.execute(
+            select(FolderSyncSource.folder_path, FolderSyncSource.source_type).where(
+                FolderSyncSource.folder_path.in_(folder_paths)
+            )
+        )
+        for row in result.all():
+            folder_sync_types[row[0]] = row[1]
+
+    # Check if current folder (or an ancestor) is a sync source
+    current_sync_type = None
+    if path:
+        # Build ancestor paths: "a/b/c" -> ["a/b/c", "a/b", "a"]
+        parts = path.split("/")
+        ancestor_paths = ["/".join(parts[:i+1]) for i in range(len(parts))]
+        result = await db.execute(
+            select(FolderSyncSource.source_type).where(
+                FolderSyncSource.folder_path.in_(ancestor_paths)
+            ).limit(1)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            current_sync_type = row
 
     # Also get current folder's index status
     current_index_status = None
@@ -196,6 +223,8 @@ async def browse(
             "index_statuses": index_statuses,
             "folder_stats": folder_stats,
             "file_index_statuses": file_index_statuses,
+            "folder_sync_types": folder_sync_types,
+            "current_sync_type": current_sync_type,
             "current_index_status": current_index_status,
         },
     )

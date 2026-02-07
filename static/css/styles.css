@@ -405,7 +405,7 @@ a:hover {
 /* File List Header */
 .file-list-header {
     display: grid;
-    grid-template-columns: 1fr 60px 80px 100px;
+    grid-template-columns: 1fr 40px 60px 80px 100px;
     gap: var(--spacing-md);
     padding: var(--spacing-sm) var(--spacing-md);
     background: var(--color-bg);
@@ -429,7 +429,7 @@ a:hover {
 
 .file-item {
     display: grid;
-    grid-template-columns: 1fr 60px 80px 100px;
+    grid-template-columns: 1fr 40px 60px 80px 100px;
     align-items: center;
     gap: var(--spacing-md);
     padding: var(--spacing-md);
@@ -444,6 +444,18 @@ a:hover {
     align-items: center;
     gap: var(--spacing-sm);
     overflow: hidden;
+}
+
+.file-item .col-sync-icon {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.sync-source-icon {
+    width: 32px;
+    height: 32px;
+    opacity: 0.8;
 }
 
 .file-item .col-search {
@@ -576,6 +588,7 @@ a:hover {
         grid-row: 1;
     }
 
+    .file-item .col-sync-icon,
     .file-item .col-size,
     .file-item .col-status {
         display: none;
@@ -1114,6 +1127,210 @@ a:hover {
 .stats-table .stats-num {
     text-align: right;
     font-variant-numeric: tabular-nums;
+}
+
+/* ============================================
+   Remote Sync
+   ============================================ */
+.sync-select {
+    width: 100%;
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-family: inherit;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: border-color var(--transition-fast);
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2386868b' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 32px;
+}
+
+.sync-select:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+.sync-fields {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-sm);
+}
+
+.form-group-compact {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.form-label-compact {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-secondary);
+}
+
+.sync-input {
+    width: 100%;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-family: inherit;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    transition: border-color var(--transition-fast);
+}
+
+.sync-input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+.sync-input::placeholder {
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-xs);
+}
+
+.sync-textarea {
+    width: 100%;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
+    font-size: var(--font-size-xs);
+    line-height: var(--line-height-normal);
+    color: var(--color-text-primary);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    resize: vertical;
+    transition: border-color var(--transition-fast);
+}
+
+.sync-textarea:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+.sync-textarea::placeholder {
+    color: var(--color-text-tertiary);
+}
+
+.sync-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-md);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--color-border-light);
+}
+
+.btn-sm {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-size: var(--font-size-xs);
+}
+
+.sync-remove-btn {
+    margin-left: auto;
+    color: var(--color-error);
+}
+
+.sync-remove-btn:hover {
+    background: rgba(255, 59, 48, 0.1);
+}
+
+.sync-status-display {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-sm);
+    padding-top: var(--spacing-sm);
+    border-top: 1px solid var(--color-border-light);
+    font-size: var(--font-size-xs);
+}
+
+.sync-status-label {
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.sync-status-value {
+    font-weight: var(--font-weight-medium);
+    padding: 1px var(--spacing-xs);
+    border-radius: var(--radius-sm);
+}
+
+.sync-status-idle {
+    color: var(--color-text-tertiary);
+}
+
+.sync-status-syncing {
+    color: var(--color-accent);
+}
+
+.sync-status-synced {
+    color: var(--color-success);
+}
+
+.sync-status-error {
+    color: var(--color-error);
+}
+
+.sync-last-synced {
+    margin-left: auto;
+    color: var(--color-text-tertiary);
+    font-size: var(--font-size-xs);
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.sp-connect-row {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-sm);
+    padding-top: var(--spacing-sm);
+    border-top: 1px solid var(--color-border-light);
+}
+
+.sp-connect-status {
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+}
+
+.sp-connect-status.connected {
+    color: var(--color-success);
+}
+
+.sp-connect-status.connected::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-success);
+}
+
+.sp-connect-status.not-connected {
+    color: var(--color-text-tertiary);
+}
+
+.sp-connect-status.not-connected::before {
+    content: '';
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--color-text-tertiary);
 }
 
 /* ============================================

@@ -31,6 +31,10 @@ dependencies = [
     "torch>=2.0.0",
     # MCP server
     "fastmcp>=0.4.0",
+    # Remote sync connectors
+    "httpx>=0.26.0",
+    "google-api-python-client>=2.100.0",
+    "google-auth>=2.23.0",
 ]
 
 [project.optional-dependencies]
