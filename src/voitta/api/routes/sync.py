@@ -43,11 +43,22 @@ class GitHubConfig(BaseModel):
     path: str = ""
 
 
+class AzureDevOpsConfig(BaseModel):
+    tenant_id: str
+    client_id: str
+    client_secret: str
+    url: str  # https://dev.azure.com/{org}/{project}
+    organization: str = ""
+    project: str = ""
+    connected: bool = False
+
+
 class UpsertSyncSourceRequest(BaseModel):
     source_type: str
     sharepoint: SharePointConfig | None = None
     google_drive: GoogleDriveConfig | None = None
     github: GitHubConfig | None = None
+    azure_devops: AzureDevOpsConfig | None = None
 
 
 class SyncSourceResponse(BaseModel):
@@ -59,6 +70,7 @@ class SyncSourceResponse(BaseModel):
     sharepoint: SharePointConfig | None = None
     google_drive: GoogleDriveConfig | None = None
     github: GitHubConfig | None = None
+    azure_devops: AzureDevOpsConfig | None = None
 
 
 class SyncStatusResponse(BaseModel):
@@ -81,6 +93,7 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
     sp = None
     gd = None
     gh = None
+    ado = None
 
     if source.source_type == "sharepoint":
         sp = SharePointConfig(
@@ -103,6 +116,16 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
             branch=source.gh_branch or "main",
             path=source.gh_path or "",
         )
+    elif source.source_type == "azure_devops":
+        ado = AzureDevOpsConfig(
+            tenant_id=source.ado_tenant_id or "",
+            client_id=source.ado_client_id or "",
+            client_secret=source.ado_client_secret or "",
+            url=source.ado_url or "",
+            organization=source.ado_organization or "",
+            project=source.ado_project or "",
+            connected=bool(source.ado_refresh_token),
+        )
 
     return SyncSourceResponse(
         folder_path=source.folder_path,
@@ -113,6 +136,7 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
         sharepoint=sp,
         google_drive=gd,
         github=gh,
+        azure_devops=ado,
     )
 
 
@@ -121,95 +145,155 @@ def _is_folder_empty(fs: Filesystem, path: str) -> bool:
     return fs.count_files_recursive(path) == 0
 
 
-def _get_redirect_uri() -> str:
-    """Get the SharePoint OAuth redirect URI."""
+def _get_oauth_redirect_uri() -> str:
+    """Get the unified OAuth redirect URI (shared by SharePoint and Azure DevOps)."""
     settings = get_settings()
-    return f"{settings.base_url}/api/sync/sharepoint/callback"
+    return f"{settings.base_url}/api/sync/oauth/callback"
 
 
-# --- SharePoint OAuth endpoints ---
+# Keep legacy SharePoint redirect URI so existing refresh tokens still work
+def _get_redirect_uri() -> str:
+    return _get_oauth_redirect_uri()
+
+
+# --- OAuth endpoints (unified for SharePoint + Azure DevOps) ---
 # NOTE: These must be registered BEFORE the catch-all {path:path} routes
 
+# OAuth config per source type: (tenant_id_field, client_id_field, client_secret_field,
+#                                  refresh_token_field, exchange_fn_import, scopes_module,
+#                                  auth_fn_import, ws_event_type)
+_OAUTH_SOURCES = {
+    "sharepoint": {
+        "tenant_id": "sp_tenant_id",
+        "client_id": "sp_client_id",
+        "client_secret": "sp_client_secret",
+        "refresh_token": "sp_refresh_token",
+        "exchange_fn": "services.sync.sharepoint",
+        "auth_fn": "services.sync.sharepoint",
+        "ws_event": "sp_connected",
+    },
+    "azure_devops": {
+        "tenant_id": "ado_tenant_id",
+        "client_id": "ado_client_id",
+        "client_secret": "ado_client_secret",
+        "refresh_token": "ado_refresh_token",
+        "exchange_fn": "services.sync.azure_devops",
+        "auth_fn": "services.sync.azure_devops",
+        "ws_event": "ado_connected",
+    },
+}
 
-@router.get("/sharepoint/callback")
-async def sharepoint_oauth_callback(
+
+@router.get("/oauth/callback")
+async def oauth_callback(
     code: str = Query(...),
     state: str = Query(...),
 ):
-    """Handle the OAuth2 redirect from Microsoft."""
-    from ...services.sync.sharepoint import exchange_code_for_tokens
-
-    # Decode folder path from state
+    """Unified OAuth2 callback — dispatches by source_type."""
     try:
         folder_path = base64.urlsafe_b64decode(state.encode()).decode()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid state parameter")
 
-    # Look up the sync source to get credentials
     async with get_db_context() as db:
         result = await db.execute(
             select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
         )
         source = result.scalar_one_or_none()
-        if not source or source.source_type != "sharepoint":
-            raise HTTPException(status_code=404, detail="SharePoint sync source not found")
+        if not source or source.source_type not in _OAUTH_SOURCES:
+            raise HTTPException(status_code=404, detail="OAuth sync source not found")
 
-        # Exchange code for tokens
-        tokens = await exchange_code_for_tokens(
-            tenant_id=source.sp_tenant_id,
-            client_id=source.sp_client_id,
-            client_secret=source.sp_client_secret,
+        cfg = _OAUTH_SOURCES[source.source_type]
+
+        from ...services.sync.azure_devops import exchange_code_for_tokens as ado_exchange
+        from ...services.sync.sharepoint import exchange_code_for_tokens as sp_exchange
+
+        exchange_fn = ado_exchange if source.source_type == "azure_devops" else sp_exchange
+        tokens = await exchange_fn(
+            tenant_id=getattr(source, cfg["tenant_id"]),
+            client_id=getattr(source, cfg["client_id"]),
+            client_secret=getattr(source, cfg["client_secret"]),
             code=code,
-            redirect_uri=_get_redirect_uri(),
+            redirect_uri=_get_oauth_redirect_uri(),
         )
+        setattr(source, cfg["refresh_token"], tokens["refresh_token"])
 
-        source.sp_refresh_token = tokens["refresh_token"]
-
-    # Broadcast connection status via WebSocket
     from ...services.watcher import file_watcher
     await file_watcher.broadcast({
-        "type": "sp_connected",
+        "type": cfg["ws_event"],
         "path": folder_path,
     })
 
-    # Redirect back to the folder's browse page
     browse_path = f"/browse/{folder_path}" if folder_path else "/browse"
     return RedirectResponse(url=browse_path, status_code=302)
 
 
-@router.get("/sharepoint/auth")
-async def sharepoint_auth_initiate(
+# Legacy route so existing SharePoint bookmarks/tokens still work
+@router.get("/sharepoint/callback")
+async def sharepoint_oauth_callback_legacy(
+    code: str = Query(...),
+    state: str = Query(...),
+):
+    return await oauth_callback(code=code, state=state)
+
+
+@router.get("/oauth/auth")
+async def oauth_auth_initiate(
     folder_path: str = Query(...),
     user: CurrentUser = None,
     db: DB = None,
 ):
-    """Generate the Microsoft OAuth2 authorization URL."""
-    from ...services.sync.sharepoint import get_auth_url
-
-    # Verify sync source exists
+    """Unified OAuth2 auth initiation — dispatches by source_type."""
     result = await db.execute(
         select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
     )
     source = result.scalar_one_or_none()
-    if not source or source.source_type != "sharepoint":
-        raise HTTPException(status_code=404, detail="SharePoint sync source not found")
+    if not source or source.source_type not in _OAUTH_SOURCES:
+        raise HTTPException(status_code=404, detail="OAuth sync source not found")
 
-    if not source.sp_tenant_id or not source.sp_client_id:
+    cfg = _OAUTH_SOURCES[source.source_type]
+    tenant_id = getattr(source, cfg["tenant_id"])
+    client_id = getattr(source, cfg["client_id"])
+
+    if not tenant_id or not client_id:
         raise HTTPException(
             status_code=400,
-            detail="Save SharePoint configuration (tenant ID, client ID, etc.) before connecting",
+            detail="Save configuration (tenant ID, client ID, etc.) before connecting",
         )
 
+    from ...services.sync.azure_devops import get_auth_url as ado_auth_url
+    from ...services.sync.sharepoint import get_auth_url as sp_auth_url
+
+    get_auth_url_fn = ado_auth_url if source.source_type == "azure_devops" else sp_auth_url
     state = base64.urlsafe_b64encode(source.folder_path.encode()).decode()
 
-    auth_url = get_auth_url(
-        tenant_id=source.sp_tenant_id,
-        client_id=source.sp_client_id,
-        redirect_uri=_get_redirect_uri(),
+    auth_url = get_auth_url_fn(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        redirect_uri=_get_oauth_redirect_uri(),
         state=state,
     )
 
     return {"auth_url": auth_url}
+
+
+# Legacy routes so existing JS still works
+@router.get("/sharepoint/auth")
+async def sharepoint_auth_initiate_legacy(
+    folder_path: str = Query(...),
+    user: CurrentUser = None,
+    db: DB = None,
+):
+    return await oauth_auth_initiate(folder_path=folder_path, user=user, db=db)
+
+
+@router.get("/azure-devops/auth")
+async def azure_devops_auth_initiate_legacy(
+    folder_path: str = Query(...),
+    user: CurrentUser = None,
+    db: DB = None,
+):
+    return await oauth_auth_initiate(folder_path=folder_path, user=user, db=db)
 
 
 # --- CRUD + sync endpoints ---
@@ -310,7 +394,7 @@ async def upsert_sync_source(
             detail="Sync can only be configured on empty folders",
         )
 
-    if request.source_type not in ("sharepoint", "google_drive", "github"):
+    if request.source_type not in ("sharepoint", "google_drive", "github", "azure_devops"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown source type: {request.source_type}",
@@ -330,6 +414,8 @@ async def upsert_sync_source(
         "sp_refresh_token",
         "gd_service_account_json", "gd_folder_id",
         "gh_token", "gh_repo", "gh_branch", "gh_path",
+        "ado_tenant_id", "ado_client_id", "ado_client_secret", "ado_refresh_token",
+        "ado_organization", "ado_project", "ado_url",
     ):
         setattr(source, field, None)
 
@@ -348,6 +434,19 @@ async def upsert_sync_source(
         source.gh_repo = request.github.repo
         source.gh_branch = request.github.branch
         source.gh_path = request.github.path
+    elif request.source_type == "azure_devops" and request.azure_devops:
+        from ...services.sync.azure_devops import _parse_ado_url
+        source.ado_tenant_id = request.azure_devops.tenant_id
+        source.ado_client_id = request.azure_devops.client_id
+        source.ado_client_secret = request.azure_devops.client_secret
+        source.ado_url = request.azure_devops.url
+        try:
+            org, project = _parse_ado_url(request.azure_devops.url)
+            source.ado_organization = org
+            source.ado_project = project
+        except ValueError:
+            source.ado_organization = request.azure_devops.organization
+            source.ado_project = request.azure_devops.project
 
     await db.flush()
     return _to_response(source)

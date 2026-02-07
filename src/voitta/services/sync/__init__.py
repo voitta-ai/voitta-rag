@@ -1,5 +1,6 @@
 """Sync connector factory."""
 
+from .azure_devops import AzureDevOpsConnector
 from .base import BaseSyncConnector
 from .github import GitHubConnector
 from .google_drive import GoogleDriveConnector
@@ -9,6 +10,7 @@ _connectors: dict[str, BaseSyncConnector] = {
     "sharepoint": SharePointConnector(),
     "google_drive": GoogleDriveConnector(),
     "github": GitHubConnector(),
+    "azure_devops": AzureDevOpsConnector(),
 }
 
 
