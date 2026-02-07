@@ -37,7 +37,7 @@ class UserHeaderMiddleware(BaseHTTPMiddleware):
             print(f"🔑 MCP request from user: {user_name}", flush=True)
             current_user.set(user_name)
         else:
-            print("🔑 MCP request (no user header)", flush=True)
+            print(f"🔑 MCP request (no user header) {request.method} {request.url.path}", flush=True)
             current_user.set(None)
         response = await call_next(request)
         return response
