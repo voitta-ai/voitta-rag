@@ -37,10 +37,10 @@ class GoogleDriveConfig(BaseModel):
 
 
 class GitHubConfig(BaseModel):
-    token: str
-    repo: str
+    repo: str  # Git URL (https:// or git@...)
     branch: str = "main"
-    path: str = ""
+    path: str = ""  # Subfolder within repo
+    ssh_key: str = ""  # Optional SSH private key
 
 
 class AzureDevOpsConfig(BaseModel):
@@ -111,10 +111,10 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
         )
     elif source.source_type == "github":
         gh = GitHubConfig(
-            token=source.gh_token or "",
             repo=source.gh_repo or "",
             branch=source.gh_branch or "main",
             path=source.gh_path or "",
+            ssh_key=source.gh_token or "",
         )
     elif source.source_type == "azure_devops":
         ado = AzureDevOpsConfig(
@@ -296,6 +296,25 @@ async def azure_devops_auth_initiate_legacy(
     return await oauth_auth_initiate(folder_path=folder_path, user=user, db=db)
 
 
+# --- Git branch listing ---
+
+
+@router.get("/git/branches")
+async def list_git_branches(
+    repo_url: str = Query(...),
+    ssh_key: str = Query(""),
+    user: CurrentUser = None,
+):
+    """List branches of a remote git repository."""
+    from ...services.sync.github import list_remote_branches
+
+    try:
+        branches = await list_remote_branches(repo_url, ssh_key)
+        return {"branches": branches}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # --- CRUD + sync endpoints ---
 
 
@@ -430,10 +449,10 @@ async def upsert_sync_source(
         source.gd_service_account_json = request.google_drive.service_account_json
         source.gd_folder_id = request.google_drive.folder_id
     elif request.source_type == "github" and request.github:
-        source.gh_token = request.github.token
         source.gh_repo = request.github.repo
         source.gh_branch = request.github.branch
         source.gh_path = request.github.path
+        source.gh_token = request.github.ssh_key
     elif request.source_type == "azure_devops" and request.azure_devops:
         from ...services.sync.azure_devops import _parse_ado_url
         source.ado_tenant_id = request.azure_devops.tenant_id
@@ -486,6 +505,8 @@ async def _run_sync(folder_path: str):
         if not source:
             return
 
+        # Suppress file watcher events for this folder during sync
+        file_watcher.suppress_path(folder_path)
         try:
             connector = get_connector(source.source_type)
             fs = FilesystemService()
@@ -509,6 +530,8 @@ async def _run_sync(folder_path: str):
             logger.exception("Sync failed for %s", folder_path)
             source.sync_status = "error"
             source.sync_error = str(e)
+        finally:
+            file_watcher.unsuppress_path(folder_path)
 
         # Broadcast sync status change via WebSocket
         await file_watcher.broadcast({

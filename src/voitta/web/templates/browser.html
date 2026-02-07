@@ -115,6 +115,16 @@
                     <span class="sync-status-value" id="folder-sync-status-value">—</span>
                     <span class="sync-last-synced" id="folder-sync-last-synced"></span>
                 </div>
+
+                <div class="folder-danger-zone">
+                    <button class="btn btn-danger btn-sm" onclick="openDeleteFolderModal()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                        Delete Folder
+                    </button>
+                </div>
             </div>
 
             <!-- Remote Sync (only for folders) -->
@@ -127,7 +137,7 @@
                         <option value="">Filesystem (local)</option>
                         <option value="sharepoint">SharePoint</option>
                         <option value="google_drive">Google Drive</option>
-                        <option value="github">GitHub</option>
+                        <option value="github">Git</option>
                         <option value="azure_devops">Azure DevOps</option>
                     </select>
                 </div>
@@ -179,23 +189,25 @@
                     </div>
                 </div>
 
-                <!-- GitHub Fields -->
+                <!-- Git Fields -->
                 <div id="sync-fields-github" class="sync-fields" style="display: none;">
                     <div class="form-group-compact">
-                        <label class="form-label-compact">Token</label>
-                        <input type="text" id="gh-token" class="sync-input" placeholder="ghp_... or fine-grained token">
-                    </div>
-                    <div class="form-group-compact">
-                        <label class="form-label-compact">Repository</label>
-                        <input type="text" id="gh-repo" class="sync-input" placeholder="owner/repo-name">
+                        <label class="form-label-compact">Repository URL</label>
+                        <input type="text" id="gh-repo" class="sync-input" placeholder="https://github.com/org/repo or git@github.com:org/repo.git" onblur="fetchGitBranches()">
                     </div>
                     <div class="form-group-compact">
                         <label class="form-label-compact">Branch</label>
-                        <input type="text" id="gh-branch" class="sync-input" placeholder="main" value="main">
+                        <select id="gh-branch" class="sync-select">
+                            <option value="main">main</option>
+                        </select>
                     </div>
                     <div class="form-group-compact">
-                        <label class="form-label-compact">Path</label>
-                        <input type="text" id="gh-path" class="sync-input" placeholder="subfolder/within/repo (optional)">
+                        <label class="form-label-compact">Subfolder</label>
+                        <input type="text" id="gh-path" class="sync-input" placeholder="path/within/repo (optional)">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">SSH Private Key</label>
+                        <textarea id="gh-ssh-key" class="sync-input" rows="3" placeholder="Paste private key here (optional, uses ~/.ssh by default)" onblur="fetchGitBranches()"></textarea>
                     </div>
                 </div>
 
@@ -330,6 +342,25 @@
             <div class="modal-actions">
                 <button type="button" class="btn btn-secondary" onclick="closeCreateFolderModal()">Cancel</button>
                 <button type="submit" class="btn btn-primary">Create</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete Folder Confirmation Modal -->
+<div class="modal" id="delete-folder-modal">
+    <div class="modal-backdrop" onclick="closeDeleteFolderModal()"></div>
+    <div class="modal-content">
+        <h2>Delete Folder</h2>
+        <p class="delete-warning">This will permanently delete the folder, all its files, sync configuration, and search index. This action cannot be undone.</p>
+        <form onsubmit="confirmDeleteFolder(event)">
+            <div class="form-group">
+                <label for="delete-folder-confirm-name">Type <strong id="delete-folder-target-name"></strong> to confirm</label>
+                <input type="text" id="delete-folder-confirm-name" required autofocus placeholder="Enter folder name">
+            </div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" onclick="closeDeleteFolderModal()">Cancel</button>
+                <button type="submit" class="btn btn-danger" id="btn-confirm-delete">Delete</button>
             </div>
         </form>
     </div>

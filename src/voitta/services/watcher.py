@@ -96,10 +96,30 @@ class FileWatcher:
         self.observer: Observer | None = None
         self._subscribers: set[asyncio.Queue] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._suppressed_paths: set[str] = set()  # Paths being bulk-deleted via API
+
+    def suppress_path(self, path: str) -> None:
+        """Suppress watcher-side deletion handling for a path (bulk delete in progress)."""
+        self._suppressed_paths.add(path)
+
+    def unsuppress_path(self, path: str) -> None:
+        """Resume watcher-side deletion handling for a path."""
+        self._suppressed_paths.discard(path)
+
+    def _is_suppressed(self, event_path: str) -> bool:
+        """Check if an event path falls under a suppressed bulk-delete."""
+        return any(
+            event_path == sp or event_path.startswith(sp + "/")
+            for sp in self._suppressed_paths
+        )
 
     def _on_event(self, event: FileEvent):
         """Handle filesystem event and notify subscribers."""
         if self._loop is None:
+            return
+
+        # Skip watcher-side cleanup for paths being bulk-deleted via API
+        if self._is_suppressed(event.path):
             return
 
         # Handle file/folder deletions - remove associated chunks from vector store

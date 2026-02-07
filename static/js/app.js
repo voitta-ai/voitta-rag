@@ -102,12 +102,12 @@ function initWebSocket() {
 // ============================================
 
 function handleFileSystemEvent(event) {
-    // Suppress notifications for files inside syncing folders
-    const inSyncingFolder = [...syncingFolders].some(
+    // Suppress notifications for files inside syncing or deleting folders
+    const inBusyFolder = [...syncingFolders, ...deletingFolders].some(
         folder => event.path === folder || event.path.startsWith(folder + '/')
     );
 
-    if (!inSyncingFolder) {
+    if (!inBusyFolder) {
         let message = '';
         switch (event.type) {
             case 'created':
@@ -129,8 +129,8 @@ function handleFileSystemEvent(event) {
         }
     }
 
-    // Refresh file list if we're in the affected directory
-    if (typeof currentPath !== 'undefined') {
+    // Refresh file list if we're in the affected directory (skip during bulk ops)
+    if (!inBusyFolder && typeof currentPath !== 'undefined') {
         const eventDir = event.path.split('/').slice(0, -1).join('/');
         if (eventDir === currentPath || event.path.startsWith(currentPath + '/')) {
             refreshFileList();
@@ -378,6 +378,76 @@ async function createFolder(event) {
         // File watcher will trigger refresh via WebSocket
     } catch (error) {
         showToast(error.message, 'error');
+    }
+}
+
+// ============================================
+// Delete Folder
+// ============================================
+
+let deleteFolderTargetPath = null;
+
+function openDeleteFolderModal() {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) {
+        showToast('No folder selected', 'error');
+        return;
+    }
+    deleteFolderTargetPath = targetPath;
+    const folderName = targetPath.split('/').pop();
+    document.getElementById('delete-folder-target-name').textContent = folderName;
+    document.getElementById('delete-folder-confirm-name').value = '';
+    document.getElementById('delete-folder-modal').classList.add('active');
+    document.getElementById('delete-folder-confirm-name').focus();
+}
+
+function closeDeleteFolderModal() {
+    document.getElementById('delete-folder-modal').classList.remove('active');
+    document.getElementById('delete-folder-confirm-name').value = '';
+    deleteFolderTargetPath = null;
+}
+
+async function confirmDeleteFolder(event) {
+    event.preventDefault();
+
+    const confirmName = document.getElementById('delete-folder-confirm-name').value.trim();
+    const folderName = deleteFolderTargetPath.split('/').pop();
+
+    if (confirmName.toLowerCase() !== folderName.toLowerCase()) {
+        showToast('Folder name does not match', 'error');
+        return;
+    }
+
+    // Show spinner state
+    const btn = document.getElementById('btn-confirm-delete');
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-inline"></span> Deleting...';
+
+    // Suppress file-level notifications during deletion
+    deletingFolders.add(deleteFolderTargetPath);
+
+    try {
+        const response = await fetch(`/api/folders/${encodeURIComponent(deleteFolderTargetPath)}`, {
+            method: 'DELETE',
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to delete folder');
+        }
+
+        showToast(`Deleted folder: ${folderName}`, 'success');
+
+        // Compute parent before closing modal (which nulls deleteFolderTargetPath)
+        const parentPath = deleteFolderTargetPath.split('/').slice(0, -1).join('/');
+        closeDeleteFolderModal();
+        window.location.href = parentPath ? `/browse/${parentPath}` : '/browse';
+    } catch (error) {
+        showToast(error.message, 'error');
+        btn.disabled = false;
+        btn.textContent = originalText;
+        deletingFolders.delete(deleteFolderTargetPath);
     }
 }
 
@@ -852,6 +922,7 @@ function escapeHtml(text) {
 
 let currentSyncSource = null;
 let syncingFolders = new Set();
+let deletingFolders = new Set();
 let currentFolderIsEmpty = true;
 
 function onSyncSourceTypeChange(value) {
@@ -893,10 +964,16 @@ function populateSyncFields(data) {
         document.getElementById('gd-service-account-json').value = data.google_drive.service_account_json || '';
         document.getElementById('gd-folder-id').value = data.google_drive.folder_id || '';
     } else if (data.source_type === 'github' && data.github) {
-        document.getElementById('gh-token').value = data.github.token || '';
         document.getElementById('gh-repo').value = data.github.repo || '';
-        document.getElementById('gh-branch').value = data.github.branch || 'main';
         document.getElementById('gh-path').value = data.github.path || '';
+        document.getElementById('gh-ssh-key').value = data.github.ssh_key || '';
+        // Fetch branches and pre-select the saved one
+        const savedBranch = data.github.branch || 'main';
+        if (data.github.repo) {
+            fetchGitBranches(savedBranch);
+        } else {
+            document.getElementById('gh-branch').innerHTML = '<option value="main">main</option>';
+        }
     } else if (data.source_type === 'azure_devops' && data.azure_devops) {
         document.getElementById('ado-tenant-id').value = data.azure_devops.tenant_id || '';
         document.getElementById('ado-client-id').value = data.azure_devops.client_id || '';
@@ -908,7 +985,7 @@ function populateSyncFields(data) {
     // Lock inputs and hide save/remove when folder has synced content
     // Keep the Connect/Reconnect button visible so users can re-consent to new scopes
     if (locked) {
-        document.querySelectorAll('.sync-input, .sync-textarea').forEach(el => el.disabled = true);
+        document.querySelectorAll('.sync-input, .sync-textarea, .sync-fields .sync-select').forEach(el => el.disabled = true);
         const saveBtn = document.getElementById('btn-sync-save');
         const removeBtn = document.getElementById('btn-sync-remove');
         if (saveBtn) saveBtn.style.display = 'none';
@@ -1034,10 +1111,10 @@ function gatherSyncConfig() {
         };
     } else if (sourceType === 'github') {
         config.github = {
-            token: document.getElementById('gh-token').value.trim(),
             repo: document.getElementById('gh-repo').value.trim(),
             branch: document.getElementById('gh-branch').value.trim() || 'main',
             path: document.getElementById('gh-path').value.trim(),
+            ssh_key: document.getElementById('gh-ssh-key').value.trim(),
         };
     } else if (sourceType === 'azure_devops') {
         config.azure_devops = {
@@ -1146,6 +1223,64 @@ function updateSpConnectStatus(connected) {
         el.className = 'sp-connect-status not-connected';
         el.textContent = 'Not connected';
         if (btn) btn.textContent = 'Connect';
+    }
+}
+
+let _lastBranchUrl = '';
+let _lastBranchKey = '';
+
+async function fetchGitBranches(preselectBranch) {
+    const repoUrl = document.getElementById('gh-repo').value.trim();
+    const sshKey = document.getElementById('gh-ssh-key').value.trim();
+    const branchSelect = document.getElementById('gh-branch');
+    if (!repoUrl) return;
+
+    // Avoid duplicate fetches for the same URL+key combo
+    if (repoUrl === _lastBranchUrl && sshKey === _lastBranchKey) {
+        if (preselectBranch) branchSelect.value = preselectBranch;
+        return;
+    }
+
+    // Show loading state
+    const savedValue = preselectBranch || branchSelect.value;
+    branchSelect.innerHTML = '<option value="" disabled selected>Loading branches...</option>';
+    branchSelect.disabled = true;
+
+    try {
+        const params = new URLSearchParams({ repo_url: repoUrl });
+        if (sshKey) params.set('ssh_key', sshKey);
+        const resp = await fetch(`/api/sync/git/branches?${params}`);
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || resp.statusText);
+        }
+        const data = await resp.json();
+        const branches = data.branches || [];
+
+        branchSelect.innerHTML = '';
+        if (branches.length === 0) {
+            branchSelect.innerHTML = '<option value="main">main</option>';
+        } else {
+            branches.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b;
+                opt.textContent = b;
+                branchSelect.appendChild(opt);
+            });
+        }
+
+        // Select the previously saved branch, or default to first (main/master)
+        if (savedValue && branches.includes(savedValue)) {
+            branchSelect.value = savedValue;
+        }
+
+        _lastBranchUrl = repoUrl;
+        _lastBranchKey = sshKey;
+    } catch (e) {
+        branchSelect.innerHTML = '<option value="main">main</option>';
+        console.warn('Failed to fetch branches:', e.message);
+    } finally {
+        branchSelect.disabled = false;
     }
 }
 
