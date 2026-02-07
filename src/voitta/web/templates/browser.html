@@ -60,6 +60,7 @@
                 {% set file_chunk_count = file_index_statuses.get(item.path, {}).get('chunk_count', 0) if not item.is_dir else 0 %}
                 {% set stats = folder_stats.get(item.path, {}) if item.is_dir else {} %}
                 {% set item_search_active = folder_search_states.get(item.path, false) if item.is_dir else false %}
+                {% set item_sync_type = folder_sync_types.get(item.path) or current_sync_type %}
                 <div class="file-item {% if item.is_dir %}folder{% else %}file{% endif %}"
                      data-path="{{ item.path }}"
                      data-index-status="{{ item_index_status }}"
@@ -78,6 +79,25 @@
                         {% endif %}
                         <span class="file-name-text">{{ item.name }}</span>
                     </div>
+                    <div class="col-sync-icon">
+                        {% if item_sync_type == 'sharepoint' %}
+                        <svg viewBox="0 0 24 24" class="sync-source-icon" title="SharePoint">
+                            <circle cx="12" cy="8" r="5" fill="#038387" opacity="0.9"/>
+                            <circle cx="7" cy="15" r="4.5" fill="#0364b8" opacity="0.9"/>
+                            <circle cx="16" cy="16" r="4" fill="#1490df" opacity="0.9"/>
+                        </svg>
+                        {% elif item_sync_type == 'google_drive' %}
+                        <svg viewBox="0 0 24 24" class="sync-source-icon" title="Google Drive">
+                            <path d="M8.5 2L1 15h6.5L15 2H8.5z" fill="#0da960"/>
+                            <path d="M15 2l-7.5 13H23L15 2z" fill="#ffd04b"/>
+                            <path d="M1 15l3.5 6h15l3.5-6H1z" fill="#4286f4"/>
+                        </svg>
+                        {% elif item_sync_type == 'github' %}
+                        <svg viewBox="0 0 24 24" fill="currentColor" class="sync-source-icon" title="GitHub">
+                            <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.604-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.115 2.504.337 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
+                        </svg>
+                        {% endif %}
+                    </div>
                     <div class="col-search">
                         {% if item.is_dir %}
                         <label class="inline-toggle" onclick="event.stopPropagation()">
@@ -88,7 +108,7 @@
                         </label>
                         {% endif %}
                     </div>
-                    <div class="col-size">{% if not item.is_dir %}{{ item.size | filesizeformat }}{% else %}—{% endif %}</div>
+                    <div class="col-size">{% if not item.is_dir %}{{ item.size | filesizeformat }}{% elif stats and stats.get('total_size', 0) > 0 %}{{ stats.get('total_size', 0) | filesizeformat }}{% else %}—{% endif %}</div>
                     <div class="col-status">
                         <span class="index-status-tag status-{{ item_index_status or 'none' }}" title="{% if item.is_dir and stats %}{{ stats.get('indexed_files', 0) }} files indexed, {{ stats.get('total_chunks', 0) }} chunks{% elif file_chunk_count %}{{ file_chunk_count }} chunks{% else %}{{ item_index_status or 'none' }}{% endif %}">
                             {% if item.is_dir %}
@@ -194,6 +214,120 @@
                             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
                         </svg>
                     </button>
+                </div>
+
+                <div class="index-status-display" id="folder-sync-status-row" style="display: none;">
+                    <span class="index-status-label">Sync:</span>
+                    <span class="sync-status-value" id="folder-sync-status-value">—</span>
+                    <span class="sync-last-synced" id="folder-sync-last-synced"></span>
+                </div>
+            </div>
+
+            <!-- Remote Sync (only for folders) -->
+            <div class="sidebar-section" id="sync-source-section" style="display: none;">
+                <h3>Remote Sync</h3>
+
+                <div class="form-group-compact">
+                    <label for="sync-source-type" class="form-label-compact">Source</label>
+                    <select id="sync-source-type" class="sync-select" onchange="onSyncSourceTypeChange(this.value)">
+                        <option value="">Filesystem (local)</option>
+                        <option value="sharepoint">SharePoint</option>
+                        <option value="google_drive">Google Drive</option>
+                        <option value="github">GitHub</option>
+                    </select>
+                </div>
+
+                <!-- SharePoint Fields -->
+                <div id="sync-fields-sharepoint" class="sync-fields" style="display: none;">
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Tenant ID</label>
+                        <input type="text" id="sp-tenant-id" class="sync-input" placeholder="xxxxxxxx-xxxx-...">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Client ID</label>
+                        <input type="text" id="sp-client-id" class="sync-input" placeholder="App registration client ID">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Client Secret</label>
+                        <input type="password" id="sp-client-secret" class="sync-input" placeholder="Client secret">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Site URL</label>
+                        <input type="text" id="sp-site-url" class="sync-input" placeholder="https://tenant.sharepoint.com/sites/MySite">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Drive ID</label>
+                        <input type="text" id="sp-drive-id" class="sync-input" placeholder="Optional (uses default doc library)">
+                    </div>
+                    <div class="sp-connect-row">
+                        <button class="btn btn-secondary btn-sm" id="btn-sp-connect" onclick="connectSharePoint()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                                <polyline points="10 17 15 12 10 7"></polyline>
+                                <line x1="15" y1="12" x2="3" y2="12"></line>
+                            </svg>
+                            Connect
+                        </button>
+                        <span class="sp-connect-status" id="sp-connect-status"></span>
+                    </div>
+                </div>
+
+                <!-- Google Drive Fields -->
+                <div id="sync-fields-google_drive" class="sync-fields" style="display: none;">
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Service Account JSON</label>
+                        <textarea id="gd-service-account-json" class="sync-textarea" rows="4" placeholder="Paste service account JSON..."></textarea>
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Folder ID</label>
+                        <input type="text" id="gd-folder-id" class="sync-input" placeholder="Google Drive folder ID">
+                    </div>
+                </div>
+
+                <!-- GitHub Fields -->
+                <div id="sync-fields-github" class="sync-fields" style="display: none;">
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Token</label>
+                        <input type="password" id="gh-token" class="sync-input" placeholder="ghp_... or fine-grained token">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Repository</label>
+                        <input type="text" id="gh-repo" class="sync-input" placeholder="owner/repo-name">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Branch</label>
+                        <input type="text" id="gh-branch" class="sync-input" placeholder="main" value="main">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Path</label>
+                        <input type="text" id="gh-path" class="sync-input" placeholder="subfolder/within/repo (optional)">
+                    </div>
+                </div>
+
+                <!-- Save + Sync buttons -->
+                <div class="sync-actions" id="sync-actions" style="display: none;">
+                    <button class="btn btn-primary btn-sm" onclick="saveSyncSource()">Save</button>
+                    <button class="btn btn-secondary btn-sm" id="btn-sync-trigger" onclick="triggerRemoteSync()">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                            <path d="M23 4v6h-6"></path>
+                            <path d="M1 20v-6h6"></path>
+                            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                        </svg>
+                        Sync
+                    </button>
+                    <button class="btn btn-text btn-sm sync-remove-btn" onclick="removeSyncSource()" title="Remove sync source">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Sync Status Display -->
+                <div class="sync-status-display" id="sync-status-display" style="display: none;">
+                    <span class="sync-status-label">Status:</span>
+                    <span class="sync-status-value" id="sync-status-value">Idle</span>
+                    <span class="sync-last-synced" id="sync-last-synced"></span>
                 </div>
             </div>
 

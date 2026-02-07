@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 
 from ..deps import DB, CurrentUser, Filesystem, Metadata
-from ...db.models import FolderIndexStatus, IndexedFile, UserFolderSetting
+from ...db.models import FolderIndexStatus, FolderSyncSource, IndexedFile, UserFolderSetting
 
 router = APIRouter()
 
@@ -39,6 +39,11 @@ class ItemDetailsResponse(BaseModel):
     # File-specific index info (only if not is_dir)
     chunk_count: int | None = None
     indexed_at: str | None = None
+    # Sync source info (folder-only)
+    sync_source_type: str | None = None
+    sync_status: str | None = None
+    last_synced_at: str | None = None
+    is_empty: bool | None = None
 
 
 @router.get("/{path:path}")
@@ -68,6 +73,10 @@ async def get_item_details(
     index_status = None
     chunk_count = None
     indexed_at = None
+    sync_source_type = None
+    sync_status = None
+    last_synced_at = None
+    is_empty = None
 
     file_type_stats = None
 
@@ -92,6 +101,16 @@ async def get_item_details(
 
         # Calculate file type stats from indexed_files + filesystem
         file_type_stats = await _get_file_type_stats(fs, db, path)
+
+        # Check for sync source
+        sync_result = await db.execute(
+            select(FolderSyncSource).where(FolderSyncSource.folder_path == path)
+        )
+        sync_source = sync_result.scalar_one_or_none()
+        sync_source_type = sync_source.source_type if sync_source else None
+        sync_status = sync_source.sync_status if sync_source else None
+        last_synced_at = sync_source.last_synced_at.isoformat() if sync_source and sync_source.last_synced_at else None
+        is_empty = fs.count_files_recursive(path) == 0
     else:
         # Get file index info from indexed_files table
         result = await db.execute(
@@ -117,6 +136,10 @@ async def get_item_details(
         file_type_stats=file_type_stats,
         chunk_count=chunk_count,
         indexed_at=indexed_at,
+        sync_source_type=sync_source_type,
+        sync_status=sync_status,
+        last_synced_at=last_synced_at,
+        is_empty=is_empty,
     )
 
 

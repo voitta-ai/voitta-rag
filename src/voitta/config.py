@@ -46,6 +46,11 @@ class Settings:
         # Indexing worker settings
         self.indexing_poll_interval: int = int(os.getenv("INDEXING_POLL_INTERVAL", "10"))
 
+        # Base URL for OAuth redirect callbacks
+        self.base_url: str = os.getenv(
+            "VOITTA_BASE_URL", f"http://localhost:{self.port}"
+        )
+
         # MCP server settings
         self.mcp_port: int = int(os.getenv("MCP_PORT", "8001"))
         self.mcp_transport: str = os.getenv("MCP_TRANSPORT", "streamable-http")  # streamable-http or sse

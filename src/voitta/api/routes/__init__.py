@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from . import details, files, folders, index, metadata, pages, raw, settings, websocket
+from . import details, files, folders, index, metadata, pages, raw, settings, sync, websocket
 
 api_router = APIRouter()
 
@@ -17,4 +17,5 @@ api_router.include_router(metadata.router, prefix="/api/metadata", tags=["metada
 api_router.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 api_router.include_router(index.router, prefix="/api/index", tags=["index"])
 api_router.include_router(details.router, prefix="/api/details", tags=["details"])
+api_router.include_router(sync.router, prefix="/api/sync", tags=["sync"])
 api_router.include_router(websocket.router, tags=["websocket"])
