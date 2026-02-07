@@ -73,30 +73,54 @@ async def _gather_file_list_data(path: str, user, fs, db):
                 "indexed_at": row[2].isoformat() if row[2] else None,
             }
 
+    def _is_git_private(repo_url: str | None, ssh_key: str | None) -> bool:
+        """A git repo is private if it uses an SSH URL or has an SSH key."""
+        url = (repo_url or "").strip()
+        if ssh_key and ssh_key.strip():
+            return True
+        if url.startswith("git@") or url.startswith("ssh://"):
+            return True
+        return False
+
     # Get sync source types for folders
     folder_sync_types = {}
+    folder_git_private = {}
     if folder_paths:
         result = await db.execute(
-            select(FolderSyncSource.folder_path, FolderSyncSource.source_type).where(
+            select(
+                FolderSyncSource.folder_path,
+                FolderSyncSource.source_type,
+                FolderSyncSource.gh_token,
+                FolderSyncSource.gh_repo,
+            ).where(
                 FolderSyncSource.folder_path.in_(folder_paths)
             )
         )
         for row in result.all():
             folder_sync_types[row[0]] = row[1]
+            if row[1] == "github":
+                folder_git_private[row[0]] = _is_git_private(row[3], row[2])
 
     # Check if current folder (or ancestor) is a sync source
     current_sync_type = None
+    current_git_private = False
     if path:
         parts = path.split("/")
         ancestor_paths = ["/".join(parts[:i+1]) for i in range(len(parts))]
         result = await db.execute(
-            select(FolderSyncSource.source_type).where(
+            select(
+                FolderSyncSource.source_type,
+                FolderSyncSource.gh_token,
+                FolderSyncSource.gh_repo,
+            ).where(
                 FolderSyncSource.folder_path.in_(ancestor_paths)
             ).limit(1)
         )
-        row = result.scalar_one_or_none()
+        row = result.first()
         if row:
-            current_sync_type = row
+            current_sync_type = row[0]
+            if row[0] == "github":
+                current_git_private = _is_git_private(row[2], row[1])
 
     return {
         "items": items,
@@ -106,6 +130,8 @@ async def _gather_file_list_data(path: str, user, fs, db):
         "folder_search_states": folder_search_states,
         "folder_sync_types": folder_sync_types,
         "current_sync_type": current_sync_type,
+        "folder_git_private": folder_git_private,
+        "current_git_private": current_git_private,
     }
 
 

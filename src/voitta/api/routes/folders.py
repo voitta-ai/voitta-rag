@@ -2,8 +2,10 @@
 
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import select
 
-from ..deps import CurrentUser, Filesystem
+from ..deps import CurrentUser, DB, Filesystem
+from ...db.models import FolderIndexStatus, FolderSyncSource, IndexedFile, UserFolderSetting
 
 router = APIRouter()
 
@@ -56,6 +58,73 @@ async def create_folder(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.delete("/{path:path}")
+async def delete_folder(
+    path: str,
+    user: CurrentUser,
+    fs: Filesystem,
+    db: DB,
+):
+    """Delete a folder and all its contents, including associated DB records."""
+    from ...services.watcher import file_watcher
+
+    # Suppress watcher events during bulk delete
+    file_watcher.suppress_path(path)
+    try:
+        # Clean up associated DB records
+        # 1. Remove sync source
+        result = await db.execute(
+            select(FolderSyncSource).where(FolderSyncSource.folder_path == path)
+        )
+        source = result.scalar_one_or_none()
+        if source:
+            await db.delete(source)
+
+        # 2. Remove index status
+        result = await db.execute(
+            select(FolderIndexStatus).where(FolderIndexStatus.folder_path == path)
+        )
+        idx_status = result.scalar_one_or_none()
+        if idx_status:
+            await db.delete(idx_status)
+
+        # 3. Remove indexed file records
+        result = await db.execute(
+            select(IndexedFile).where(IndexedFile.index_folder == path)
+        )
+        for indexed_file in result.scalars().all():
+            await db.delete(indexed_file)
+
+        # 4. Remove user folder settings
+        result = await db.execute(
+            select(UserFolderSetting).where(UserFolderSetting.folder_path == path)
+        )
+        for setting in result.scalars().all():
+            await db.delete(setting)
+
+        # 5. Remove from vector store
+        try:
+            from ...services.vector_store import VectorStoreService
+            vector_store = VectorStoreService()
+            vector_store.delete_by_index_folder(path)
+        except Exception:
+            pass  # Vector store may not be available
+
+        # 6. Delete the folder from disk
+        fs.delete_folder(path)
+
+        await db.flush()
+        return {"ok": True}
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except NotADirectoryError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    finally:
+        file_watcher.unsuppress_path(path)
 
 
 @router.get("/{path:path}")

@@ -138,6 +138,22 @@ class FilesystemService:
         new_folder.mkdir(parents=False)
         return self._get_file_info(new_folder)
 
+    def delete_folder(self, relative_path: str) -> None:
+        """Delete a folder and all its contents."""
+        import shutil
+
+        if not relative_path or relative_path == "/":
+            raise ValueError("Cannot delete root directory")
+
+        path = self._resolve_path(relative_path)
+
+        if not path.exists():
+            raise FileNotFoundError(f"Folder not found: {relative_path}")
+        if not path.is_dir():
+            raise NotADirectoryError(f"Not a directory: {relative_path}")
+
+        shutil.rmtree(path)
+
     def upload_file(self, relative_path: str, filename: str, file: BinaryIO) -> FileInfo:
         """Upload a file to a directory."""
         parent = self._resolve_path(relative_path)

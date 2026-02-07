@@ -99,6 +99,22 @@ def create_app() -> FastAPI:
     templates_path = Path(__file__).parent / "web" / "templates"
     app.state.templates = Jinja2Templates(directory=str(templates_path))
 
+    def _compact_number(value):
+        """Format large numbers: 1000 -> 1K, 2500 -> 2.5K, 1200000 -> 1.2M."""
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return value
+        if n >= 1_000_000:
+            v = n / 1_000_000
+            return f"{v:.1f}M".replace(".0M", "M")
+        if n >= 1_000:
+            v = n / 1_000
+            return f"{v:.1f}K".replace(".0K", "K")
+        return str(n)
+
+    app.state.templates.env.filters["compact"] = _compact_number
+
     # Include routes
     app.include_router(api_router)
 
