@@ -44,18 +44,11 @@ class UserHeaderMiddleware(BaseHTTPMiddleware):
         return response
 
 
-class AuthError(Exception):
-    """Raised when user is not authorized."""
 
-    pass
-
-
-def _get_current_user_name() -> str:
-    """Get the current user name from context, or raise AuthError."""
-    user_name = current_user.get()
-    if not user_name:
-        raise AuthError("Not authorized: X-User-Name header required")
-    return user_name
+def _get_current_user_name() -> str | None:
+    """Get the current user name from context, or None if not provided."""
+    retval = current_user.get()
+    return retval
 
 
 def _get_or_create_user(db: Session, user_name: str) -> User:
@@ -162,10 +155,7 @@ def search(
     Returns:
         List of matching document chunks with metadata and similarity scores
 
-    Raises:
-        AuthError: If X-User-Name header is not provided
     """
-    # Require authentication
     user_name = _get_current_user_name()
 
     settings = get_settings()
@@ -177,32 +167,46 @@ def search(
     vector_store = get_vector_store()
     engine = get_sync_engine()
 
+    effective_include_folders = include_folders
+    disabled_index_folders = []
+
     with Session(engine) as db:
-        # Get or create user
-        user = _get_or_create_user(db, user_name)
+        if user_name:
+            # User-based folder filtering
+            user = _get_or_create_user(db, user_name)
+            user_active_folders = _get_user_active_folders(db, user.id)
 
-        # Get user's active folders
-        user_active_folders = _get_user_active_folders(db, user.id)
+            if not user_active_folders:
+                return []
 
-        # If no active folders, return empty results
-        if not user_active_folders:
-            return []
+            # Get all unique folder_path values from indexed files
+            result = db.execute(select(IndexedFile.folder_path).distinct())
+            all_indexed_folder_paths = [row[0] for row in result.fetchall()]
 
-        # Get all unique folder_path values from indexed files
-        result = db.execute(select(IndexedFile.folder_path).distinct())
-        all_indexed_folder_paths = [row[0] for row in result.fetchall()]
+            # Expand active folders to include subfolders
+            expanded_active_folders = set(user_active_folders)
+            for folder_path in all_indexed_folder_paths:
+                folder_normalized = folder_path.rstrip("/")
+                for active_folder in user_active_folders:
+                    active_normalized = active_folder.rstrip("/")
+                    if folder_normalized == active_normalized or folder_normalized.startswith(active_normalized + "/"):
+                        expanded_active_folders.add(folder_path)
+                        break
 
-        # Expand active folders to include subfolders
-        # A folder_path is included if it equals an active folder OR starts with "active_folder/"
-        expanded_active_folders = set(user_active_folders)
-        for folder_path in all_indexed_folder_paths:
-            folder_normalized = folder_path.rstrip("/")
-            for active_folder in user_active_folders:
-                active_normalized = active_folder.rstrip("/")
-                # Include if exact match or is a subfolder
-                if folder_normalized == active_normalized or folder_normalized.startswith(active_normalized + "/"):
-                    expanded_active_folders.add(folder_path)
-                    break
+            # Combine with explicit include_folders filter
+            effective_include_folders = list(expanded_active_folders)
+            if include_folders:
+                filtered_folders = set()
+                for f in effective_include_folders:
+                    f_normalized = f.rstrip("/")
+                    for requested in include_folders:
+                        req_normalized = requested.rstrip("/")
+                        if f_normalized == req_normalized or f_normalized.startswith(req_normalized + "/"):
+                            filtered_folders.add(f)
+                            break
+                effective_include_folders = list(filtered_folders)
+                if not effective_include_folders:
+                    return []
 
         # Get disabled folders to exclude from search (by index_folder)
         result = db.execute(
@@ -214,24 +218,6 @@ def search(
     query_embedding = embedding_service.embed_query(query)
     sparse_service = get_sparse_embedding_service()
     sparse_query = sparse_service.embed_query(query)
-
-    # Combine user's expanded active folders with any explicit include_folders filter
-    # If include_folders is specified, intersect with user's expanded active folders
-    effective_include_folders = list(expanded_active_folders)
-    if include_folders:
-        # Only include folders that are both in user's expanded active list AND in the requested list
-        # Also include subfolders of requested folders
-        filtered_folders = set()
-        for f in effective_include_folders:
-            f_normalized = f.rstrip("/")
-            for requested in include_folders:
-                req_normalized = requested.rstrip("/")
-                if f_normalized == req_normalized or f_normalized.startswith(req_normalized + "/"):
-                    filtered_folders.add(f)
-                    break
-        effective_include_folders = list(filtered_folders)
-        if not effective_include_folders:
-            return []  # No overlap between requested and active folders
 
     # Search vector store with hybrid retrieval (excluding disabled index_folders)
     chunks = vector_store.search(
@@ -281,37 +267,30 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
     """List all folders that have been indexed, with their status and metadata.
 
     Returns:
-        List of indexed folders with status, file counts, and user metadata
-
-    Raises:
-        AuthError: If X-User-Name header is not provided
+        List of indexed folders with status, file counts, and user metadata.
+        If no X-User-Name header, returns all folders.
     """
-    # Require authentication
     user_name = _get_current_user_name()
     engine = get_sync_engine()
 
     with Session(engine) as db:
-        # Get or create user
-        user = _get_or_create_user(db, user_name)
-
-        # Get user's active folders
-        user_active_folders = _get_user_active_folders(db, user.id)
-
-        # If no active folders, return empty list
-        if not user_active_folders:
-            return []
+        user_active_folders = None
+        if user_name:
+            user = _get_or_create_user(db, user_name)
+            user_active_folders = _get_user_active_folders(db, user.id)
+            if not user_active_folders:
+                return []
 
         # Get all folder index statuses
         result = db.execute(select(FolderIndexStatus))
         folder_statuses = {fs.folder_path: fs.status for fs in result.scalars().all()}
 
-        # Get file counts and chunk totals per index_folder (the folder at which indexing was triggered)
+        # Get file counts and chunk totals per index_folder
         result = db.execute(select(IndexedFile))
         indexed_files = result.scalars().all()
 
         folder_stats: dict[str, dict] = {}
         for f in indexed_files:
-            # Use index_folder if available, otherwise fall back to folder_path
             idx_folder = getattr(f, "index_folder", None) or f.folder_path
             if idx_folder not in folder_stats:
                 folder_stats[idx_folder] = {"file_count": 0, "total_chunks": 0}
@@ -325,8 +304,9 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
         )
         folder_metadata = {meta.path: meta.metadata_text for meta in result.scalars().all()}
 
-        # Helper function to check if a folder is active (exact match or subfolder of active)
         def is_folder_active(folder_path: str) -> bool:
+            if user_active_folders is None:
+                return True
             folder_normalized = folder_path.rstrip("/")
             for active_folder in user_active_folders:
                 active_normalized = active_folder.rstrip("/")
@@ -334,10 +314,8 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
                     return True
             return False
 
-        # Build results - include folders that are active or subfolders of active folders
         results = []
         for folder_path in all_folder_paths:
-            # Skip folders not active for this user (including subfolder check)
             if not is_folder_active(folder_path):
                 continue
 
@@ -630,12 +608,17 @@ def set_folder_active(
         is_active: Whether to activate (True) or deactivate (False) the folder
 
     Returns:
-        Result with number of subfolders updated
-
-    Raises:
-        AuthError: If X-User-Name header is not provided
+        Result with number of subfolders updated. Error if X-User-Name header not provided.
     """
     user_name = _get_current_user_name()
+    if not user_name:
+        return SetFolderActiveResult(
+            success=False,
+            folder_path=folder_path,
+            is_active=is_active,
+            subfolders_updated=0,
+            error="X-User-Name header required for this operation",
+        )
     settings = get_settings()
     engine = get_sync_engine()
 
@@ -727,33 +710,31 @@ def get_folder_active_states() -> list[FolderActiveState]:
     Returns:
         List of folders with their active states
 
-    Raises:
-        AuthError: If X-User-Name header is not provided
     """
     user_name = _get_current_user_name()
     engine = get_sync_engine()
 
     with Session(engine) as db:
-        # Get or create user
-        user = _get_or_create_user(db, user_name)
+        user_settings = {}
+        if user_name:
+            user = _get_or_create_user(db, user_name)
+            result = db.execute(
+                select(UserFolderSetting).where(UserFolderSetting.user_id == user.id)
+            )
+            user_settings = {s.folder_path: s.search_active for s in result.scalars().all()}
 
         # Get all indexed folders
         result = db.execute(select(FolderIndexStatus.folder_path))
         all_folders = [row[0] for row in result.fetchall()]
 
-        # Get user's folder settings
-        result = db.execute(
-            select(UserFolderSetting).where(UserFolderSetting.user_id == user.id)
-        )
-        user_settings = {s.folder_path: s.search_active for s in result.scalars().all()}
-
-        # Build results with default=False for folders without settings
+        # Without a user, all folders are active
         results = []
         for folder in all_folders:
+            is_active = user_settings.get(folder, False) if user_name else True
             results.append(
                 FolderActiveState(
                     folder_path=folder,
-                    is_active=user_settings.get(folder, False),
+                    is_active=is_active,
                 )
             )
 
