@@ -6,7 +6,6 @@ build-backend = "hatchling.build"
 name = "voitta-rag"
 version = "0.1.0"
 description = "Web-based file management system with real-time monitoring"
-readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.109.0",
@@ -28,6 +27,8 @@ dependencies = [
     "sentence-transformers>=2.2.0",
     "transformers>=4.36.0,<5.0.0",
     "qdrant-client>=1.7.0",
+    "fastembed>=0.7.0",
+    "tqdm>=4.60.0",
     "torch>=2.0.0",
     # MCP server
     "fastmcp>=0.4.0",

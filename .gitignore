@@ -57,3 +57,9 @@ data/*
 qdrant_storage/
 .mineru-venv/
 logs/
+users.txt
+scripts/import_repos.json
+
+*~
+\#*
+.#*

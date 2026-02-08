@@ -40,7 +40,10 @@ class GitHubConfig(BaseModel):
     repo: str  # Git URL (https:// or git@...)
     branch: str = "main"
     path: str = ""  # Subfolder within repo
+    auth_method: str = "ssh"  # "ssh" or "token"
     ssh_key: str = ""  # Optional SSH private key
+    username: str = ""  # For token auth (e.g. GitHub username or x-access-token)
+    token: str = ""  # Personal access token (PAT)
 
 
 class AzureDevOpsConfig(BaseModel):
@@ -114,7 +117,10 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
             repo=source.gh_repo or "",
             branch=source.gh_branch or "main",
             path=source.gh_path or "",
+            auth_method=source.gh_auth_method or "ssh",
             ssh_key=source.gh_token or "",
+            username=source.gh_username or "",
+            token=source.gh_pat or "",
         )
     elif source.source_type == "azure_devops":
         ado = AzureDevOpsConfig(
@@ -303,13 +309,17 @@ async def azure_devops_auth_initiate_legacy(
 async def list_git_branches(
     repo_url: str = Query(...),
     ssh_key: str = Query(""),
+    token: str = Query(""),
+    username: str = Query(""),
     user: CurrentUser = None,
 ):
     """List branches of a remote git repository."""
     from ...services.sync.github import list_remote_branches
 
     try:
-        branches = await list_remote_branches(repo_url, ssh_key)
+        branches = await list_remote_branches(
+            repo_url, ssh_key=ssh_key, token=token, username=username
+        )
         return {"branches": branches}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -433,6 +443,7 @@ async def upsert_sync_source(
         "sp_refresh_token",
         "gd_service_account_json", "gd_folder_id",
         "gh_token", "gh_repo", "gh_branch", "gh_path",
+        "gh_auth_method", "gh_username", "gh_pat",
         "ado_tenant_id", "ado_client_id", "ado_client_secret", "ado_refresh_token",
         "ado_organization", "ado_project", "ado_url",
     ):
@@ -452,7 +463,10 @@ async def upsert_sync_source(
         source.gh_repo = request.github.repo
         source.gh_branch = request.github.branch
         source.gh_path = request.github.path
+        source.gh_auth_method = request.github.auth_method
         source.gh_token = request.github.ssh_key
+        source.gh_username = request.github.username
+        source.gh_pat = request.github.token
     elif request.source_type == "azure_devops" and request.azure_devops:
         from ...services.sync.azure_devops import _parse_ado_url
         source.ado_tenant_id = request.azure_devops.tenant_id

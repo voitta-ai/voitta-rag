@@ -207,8 +207,27 @@
                         <input type="text" id="gh-path" class="sync-input" placeholder="path/within/repo (optional)">
                     </div>
                     <div class="form-group-compact">
-                        <label class="form-label-compact">SSH Private Key</label>
-                        <textarea id="gh-ssh-key" class="sync-input" rows="3" placeholder="Paste private key here (optional, uses ~/.ssh by default)" onblur="fetchGitBranches()"></textarea>
+                        <label class="form-label-compact">Auth Method</label>
+                        <select id="gh-auth-method" class="sync-select" onchange="toggleGhAuth()">
+                            <option value="ssh">SSH Key</option>
+                            <option value="token">Token (PAT)</option>
+                        </select>
+                    </div>
+                    <div id="gh-ssh-fields">
+                        <div class="form-group-compact">
+                            <label class="form-label-compact">SSH Private Key</label>
+                            <textarea id="gh-ssh-key" class="sync-input" rows="3" placeholder="Paste private key here (optional, uses ~/.ssh by default)" onblur="fetchGitBranches()"></textarea>
+                        </div>
+                    </div>
+                    <div id="gh-token-fields" style="display: none;">
+                        <div class="form-group-compact">
+                            <label class="form-label-compact">Username</label>
+                            <input type="text" id="gh-username" class="sync-input" placeholder="GitHub username or x-access-token" onblur="fetchGitBranches()">
+                        </div>
+                        <div class="form-group-compact">
+                            <label class="form-label-compact">Token (PAT)</label>
+                            <input type="password" id="gh-pat" class="sync-input" placeholder="ghp_... or github_pat_..." onblur="fetchGitBranches()">
+                        </div>
                     </div>
                 </div>
 

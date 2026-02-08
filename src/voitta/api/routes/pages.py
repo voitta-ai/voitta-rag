@@ -155,6 +155,33 @@ async def landing_page(
     result = await db.execute(select(User).order_by(User.name))
     users = result.scalars().all()
 
+    # If no users exist, create a default one and auto-login
+    if not users:
+        default_user = User(name="User")
+        db.add(default_user)
+        await db.flush()
+        response = RedirectResponse(url="/browse", status_code=302)
+        response.set_cookie(
+            key="voitta_user_id",
+            value=str(default_user.id),
+            httponly=True,
+            samesite="lax",
+            max_age=60 * 60 * 24 * 365,
+        )
+        return response
+
+    # If only one user, auto-login
+    if len(users) == 1:
+        response = RedirectResponse(url="/browse", status_code=302)
+        response.set_cookie(
+            key="voitta_user_id",
+            value=str(users[0].id),
+            httponly=True,
+            samesite="lax",
+            max_age=60 * 60 * 24 * 365,
+        )
+        return response
+
     templates = get_templates(request)
     return templates.TemplateResponse(
         request,
