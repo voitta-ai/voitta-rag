@@ -17,6 +17,7 @@ from .db.database import get_sync_engine
 from .db.models import FileMetadata, FolderIndexStatus, IndexedFile, User, UserFolderSetting
 from .services.embedding import get_embedding_service
 from .services.parsers import parse_file
+from .services.sparse_embedding import get_sparse_embedding_service
 from .services.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
@@ -147,14 +148,16 @@ def search(
     limit: int | None = None,
     include_folders: list[str] | None = None,
     exclude_folders: list[str] | None = None,
+    sparse_weight: float | None = None,
 ) -> list[SearchResult]:
-    """Search indexed documents using semantic similarity.
+    """Search indexed documents using hybrid semantic + keyword similarity.
 
     Args:
         query: The search query text
-        limit: Maximum number of results to return (default from MCP_SEARCH_LIMIT env var)
-        include_folders: Optional list of folder paths to search within (searches all if not specified)
-        exclude_folders: Optional list of folder paths to exclude from search
+        limit: Max results to return. Defaults to 20.
+        include_folders: Folder paths to restrict search to
+        exclude_folders: Folder paths to exclude
+        sparse_weight: BM25 vs semantic balance: 0.0 = pure semantic, 1.0 = pure keyword. Defaults to 0.1.
 
     Returns:
         List of matching document chunks with metadata and similarity scores
@@ -168,6 +171,8 @@ def search(
     settings = get_settings()
     if limit is None:
         limit = settings.mcp_search_limit
+    if sparse_weight is None:
+        sparse_weight = settings.sparse_weight
     embedding_service = get_embedding_service()
     vector_store = get_vector_store()
     engine = get_sync_engine()
@@ -205,8 +210,10 @@ def search(
         )
         disabled_index_folders = [row[0] for row in result.fetchall()]
 
-    # Generate query embedding
+    # Generate query embeddings (dense + sparse)
     query_embedding = embedding_service.embed_query(query)
+    sparse_service = get_sparse_embedding_service()
+    sparse_query = sparse_service.embed_query(query)
 
     # Combine user's expanded active folders with any explicit include_folders filter
     # If include_folders is specified, intersect with user's expanded active folders
@@ -226,13 +233,15 @@ def search(
         if not effective_include_folders:
             return []  # No overlap between requested and active folders
 
-    # Search vector store (excluding disabled index_folders)
+    # Search vector store with hybrid retrieval (excluding disabled index_folders)
     chunks = vector_store.search(
         query_embedding=query_embedding,
         limit=limit,
         include_folders=effective_include_folders,
         exclude_folders=exclude_folders,
         exclude_index_folders=disabled_index_folders if disabled_index_folders else None,
+        sparse_query=sparse_query,
+        sparse_weight=sparse_weight,
     )
 
     # Get file metadata from database

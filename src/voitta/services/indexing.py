@@ -14,6 +14,7 @@ from .chunking import ChunkingService, get_chunking_service
 from .embedding import EmbeddingService, get_embedding_service
 from .parsers import can_parse, parse_file, get_parser
 from .parsers.pdf_parser import PdfParser, get_pdf_page_count
+from .sparse_embedding import SparseEmbeddingService, get_sparse_embedding_service
 from .vector_store import ChunkMetadata, VectorStoreService, get_vector_store
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ class IndexingService:
         self.settings = get_settings()
         self.chunker = chunker or get_chunking_service()
         self.embedder = embedder or get_embedding_service()
+        self.sparse_embedder = get_sparse_embedding_service()
         self.vector_store = vector_store or get_vector_store()
         self.root_path = self.settings.root_path
 
@@ -282,9 +284,14 @@ class IndexingService:
                     )
                     chunk_data.append((chunk.text, embedding, metadata))
 
+                # Generate sparse embeddings
+                sparse_vectors = self.sparse_embedder.embed_texts(
+                    [chunk.text for chunk in text_chunks]
+                )
+
                 # Store immediately
                 try:
-                    self.vector_store.store_chunks(chunk_data)
+                    self.vector_store.store_chunks(chunk_data, sparse_vectors=sparse_vectors)
                     total_chunks_stored += len(chunk_data)
                     chunk_offset += len(text_chunks)
 
@@ -367,10 +374,11 @@ class IndexingService:
 
         idx_logger.info(f"[INDEX] Generated {len(chunks)} chunks")
 
-        # Generate embeddings
+        # Generate embeddings (dense + sparse)
         try:
             texts = [chunk.text for chunk in chunks]
             embeddings = self.embedder.embed_texts(texts)
+            sparse_vectors = self.sparse_embedder.embed_texts(texts)
         except Exception as e:
             idx_logger.exception(f"[INDEX] EXCEPTION during embedding: {e}")
             return False, 0
@@ -396,7 +404,7 @@ class IndexingService:
 
         # Store in vector database
         try:
-            self.vector_store.store_chunks(chunk_data)
+            self.vector_store.store_chunks(chunk_data, sparse_vectors=sparse_vectors)
         except Exception as e:
             idx_logger.exception(f"[INDEX] EXCEPTION storing chunks: {e}")
             return False, 0

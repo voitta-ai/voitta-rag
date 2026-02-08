@@ -10,6 +10,7 @@ from qdrant_client.http import models as qmodels
 from qdrant_client.http.exceptions import UnexpectedResponse
 
 from ..config import get_settings
+from .sparse_embedding import SPARSE_VECTOR_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class VectorStoreService:
         self.collection_name = settings.qdrant_collection
         self.dimension = settings.embedding_dimension
         self._client: QdrantClient | None = None
+        self._has_sparse: bool = False
 
     @property
     def client(self) -> QdrantClient:
@@ -66,8 +68,11 @@ class VectorStoreService:
     def _ensure_collection(self) -> None:
         """Ensure the collection exists with proper configuration."""
         try:
-            self._client.get_collection(self.collection_name)
+            info = self._client.get_collection(self.collection_name)
             logger.info(f"Collection '{self.collection_name}' exists")
+            # Check if sparse vectors are configured
+            sparse = info.config.params.sparse_vectors or {}
+            self._has_sparse = SPARSE_VECTOR_NAME in sparse
         except (UnexpectedResponse, Exception):
             logger.info(f"Creating collection '{self.collection_name}'")
             self._client.create_collection(
@@ -76,34 +81,33 @@ class VectorStoreService:
                     size=self.dimension,
                     distance=qmodels.Distance.COSINE,
                 ),
+                sparse_vectors_config={
+                    SPARSE_VECTOR_NAME: qmodels.SparseVectorParams(
+                        modifier=qmodels.Modifier.IDF,
+                    ),
+                },
             )
             # Create payload indexes for efficient filtering
-            self._client.create_payload_index(
-                collection_name=self.collection_name,
-                field_name="file_path",
-                field_schema=qmodels.PayloadSchemaType.KEYWORD,
-            )
-            self._client.create_payload_index(
-                collection_name=self.collection_name,
-                field_name="folder_path",
-                field_schema=qmodels.PayloadSchemaType.KEYWORD,
-            )
-            self._client.create_payload_index(
-                collection_name=self.collection_name,
-                field_name="index_folder",
-                field_schema=qmodels.PayloadSchemaType.KEYWORD,
-            )
+            for field in ("file_path", "folder_path", "index_folder"):
+                self._client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name=field,
+                    field_schema=qmodels.PayloadSchemaType.KEYWORD,
+                )
+            self._has_sparse = True
             logger.info(f"Collection '{self.collection_name}' created")
 
     def store_chunks(
         self,
         chunks: list[tuple[str, list[float], ChunkMetadata]],
+        sparse_vectors: list[tuple[list[int], list[float]]] | None = None,
         batch_size: int = 100,
     ) -> list[str]:
         """Store multiple chunks with their embeddings.
 
         Args:
             chunks: List of (text, embedding, metadata) tuples
+            sparse_vectors: Optional list of (indices, values) tuples for sparse vectors
             batch_size: Number of chunks per batch to avoid payload limits
 
         Returns:
@@ -115,7 +119,7 @@ class VectorStoreService:
         points = []
         ids = []
 
-        for text, embedding, metadata in chunks:
+        for idx, (text, embedding, metadata) in enumerate(chunks):
             point_id = str(uuid.uuid4())
             ids.append(point_id)
 
@@ -139,10 +143,22 @@ class VectorStoreService:
             if metadata.source_page_count is not None:
                 payload["source_page_count"] = metadata.source_page_count
 
+            # Build vector: unnamed dense + optional sparse
+            if sparse_vectors and idx < len(sparse_vectors):
+                indices, values = sparse_vectors[idx]
+                vector = {
+                    "": embedding,
+                    SPARSE_VECTOR_NAME: qmodels.SparseVector(
+                        indices=indices, values=values,
+                    ),
+                }
+            else:
+                vector = embedding
+
             points.append(
                 qmodels.PointStruct(
                     id=point_id,
-                    vector=embedding,
+                    vector=vector,
                     payload=payload,
                 )
             )
@@ -273,32 +289,17 @@ class VectorStoreService:
 
         return count
 
-    def search(
+    def _build_filter(
         self,
-        query_embedding: list[float],
-        limit: int = 10,
         folder_filter: str | None = None,
         include_folders: list[str] | None = None,
         exclude_folders: list[str] | None = None,
         exclude_index_folders: list[str] | None = None,
-    ) -> list[StoredChunk]:
-        """Search for similar chunks.
-
-        Args:
-            query_embedding: The query embedding vector
-            limit: Maximum number of results
-            folder_filter: Optional single folder path to filter by (legacy)
-            include_folders: Optional list of folder paths to include (OR logic)
-            exclude_folders: Optional list of folder paths to exclude
-            exclude_index_folders: Optional list of index_folders to exclude (for disabled folders)
-
-        Returns:
-            List of matching chunks with scores
-        """
+    ) -> qmodels.Filter | None:
+        """Build a Qdrant filter from folder constraints."""
         must_conditions = []
         must_not_conditions = []
 
-        # Legacy single folder filter
         if folder_filter:
             must_conditions.append(
                 qmodels.FieldCondition(
@@ -307,7 +308,6 @@ class VectorStoreService:
                 )
             )
 
-        # Include folders (OR logic - match any of these folders)
         if include_folders:
             must_conditions.append(
                 qmodels.FieldCondition(
@@ -316,7 +316,6 @@ class VectorStoreService:
                 )
             )
 
-        # Exclude folders by folder_path
         if exclude_folders:
             for folder in exclude_folders:
                 must_not_conditions.append(
@@ -326,7 +325,6 @@ class VectorStoreService:
                     )
                 )
 
-        # Exclude folders by index_folder (for disabled folders)
         if exclude_index_folders:
             for folder in exclude_index_folders:
                 must_not_conditions.append(
@@ -336,14 +334,82 @@ class VectorStoreService:
                     )
                 )
 
-        # Build filter
-        search_filter = None
         if must_conditions or must_not_conditions:
-            search_filter = qmodels.Filter(
+            return qmodels.Filter(
                 must=must_conditions if must_conditions else None,
                 must_not=must_not_conditions if must_not_conditions else None,
             )
+        return None
 
+    @staticmethod
+    def _result_to_chunk(result) -> StoredChunk:
+        """Convert a Qdrant query result to a StoredChunk."""
+        payload = result.payload
+        return StoredChunk(
+            id=str(result.id),
+            text=payload["text"],
+            metadata=ChunkMetadata(
+                file_path=payload["file_path"],
+                folder_path=payload["folder_path"],
+                index_folder=payload.get("index_folder", payload["folder_path"]),
+                file_name=payload["file_name"],
+                chunk_index=payload["chunk_index"],
+                total_chunks=payload["total_chunks"],
+                start_char=payload["start_char"],
+                end_char=payload["end_char"],
+                indexed_at=payload["indexed_at"],
+                start_page=payload.get("start_page"),
+                end_page=payload.get("end_page"),
+                source_page_count=payload.get("source_page_count"),
+            ),
+            score=result.score,
+        )
+
+    def search(
+        self,
+        query_embedding: list[float],
+        limit: int = 10,
+        folder_filter: str | None = None,
+        include_folders: list[str] | None = None,
+        exclude_folders: list[str] | None = None,
+        exclude_index_folders: list[str] | None = None,
+        sparse_query: tuple[list[int], list[float]] | None = None,
+        sparse_weight: float = 0.1,
+    ) -> list[StoredChunk]:
+        """Search for similar chunks using dense or hybrid (dense + sparse) retrieval.
+
+        Args:
+            query_embedding: The dense query embedding vector
+            limit: Maximum number of results
+            folder_filter: Optional single folder path to filter by (legacy)
+            include_folders: Optional list of folder paths to include (OR logic)
+            exclude_folders: Optional list of folder paths to exclude
+            exclude_index_folders: Optional list of index_folders to exclude
+            sparse_query: Optional (indices, values) for BM25 sparse query
+            sparse_weight: Weight for sparse/keyword results (0-1). Default 0.9.
+                           Dense weight is (1 - sparse_weight).
+
+        Returns:
+            List of matching chunks with scores
+        """
+        search_filter = self._build_filter(
+            folder_filter, include_folders, exclude_folders, exclude_index_folders,
+        )
+
+        # Hybrid search: use Qdrant prefetch with both dense and sparse
+        if sparse_query and self._has_sparse:
+            indices, values = sparse_query
+            if indices:
+                return self._hybrid_search(
+                    query_embedding=query_embedding,
+                    sparse_indices=indices,
+                    sparse_values=values,
+                    limit=limit,
+                    search_filter=search_filter,
+                    sparse_weight=sparse_weight,
+                )
+
+        # Dense-only fallback
         results = self.client.query_points(
             collection_name=self.collection_name,
             query=query_embedding,
@@ -351,30 +417,83 @@ class VectorStoreService:
             query_filter=search_filter,
         ).points
 
-        chunks = []
-        for result in results:
-            payload = result.payload
-            chunks.append(
-                StoredChunk(
-                    id=str(result.id),
-                    text=payload["text"],
-                    metadata=ChunkMetadata(
-                        file_path=payload["file_path"],
-                        folder_path=payload["folder_path"],
-                        index_folder=payload.get("index_folder", payload["folder_path"]),
-                        file_name=payload["file_name"],
-                        chunk_index=payload["chunk_index"],
-                        total_chunks=payload["total_chunks"],
-                        start_char=payload["start_char"],
-                        end_char=payload["end_char"],
-                        indexed_at=payload["indexed_at"],
-                        start_page=payload.get("start_page"),
-                        end_page=payload.get("end_page"),
-                        source_page_count=payload.get("source_page_count"),
-                    ),
-                    score=result.score,
-                )
+        return [self._result_to_chunk(r) for r in results]
+
+    def _hybrid_search(
+        self,
+        query_embedding: list[float],
+        sparse_indices: list[int],
+        sparse_values: list[float],
+        limit: int,
+        search_filter: qmodels.Filter | None,
+        sparse_weight: float,
+    ) -> list[StoredChunk]:
+        """Perform hybrid search combining dense and sparse results.
+
+        Uses min-max normalized scores with weighted combination.
+        """
+        dense_weight = 1.0 - sparse_weight
+        # Over-fetch from each to have enough candidates for fusion
+        prefetch_limit = limit * 3
+
+        # Run both queries via Qdrant prefetch + fusion is RRF-only,
+        # so we query separately for weighted combination.
+        dense_results = self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_embedding,
+            limit=prefetch_limit,
+            query_filter=search_filter,
+        ).points
+
+        sparse_results = self.client.query_points(
+            collection_name=self.collection_name,
+            query=qmodels.SparseVector(
+                indices=sparse_indices,
+                values=sparse_values,
+            ),
+            using=SPARSE_VECTOR_NAME,
+            limit=prefetch_limit,
+            query_filter=search_filter,
+        ).points
+
+        # Normalize scores to [0, 1] range
+        def normalize(results):
+            if not results:
+                return {}
+            scores = [r.score for r in results]
+            min_s, max_s = min(scores), max(scores)
+            spread = max_s - min_s
+            normed = {}
+            for r in results:
+                norm_score = (r.score - min_s) / spread if spread > 0 else 1.0
+                normed[str(r.id)] = (norm_score, r)
+            return normed
+
+        dense_normed = normalize(dense_results)
+        sparse_normed = normalize(sparse_results)
+
+        # Combine scores
+        all_ids = set(dense_normed.keys()) | set(sparse_normed.keys())
+        combined = []
+        for pid in all_ids:
+            d_score = dense_normed[pid][0] if pid in dense_normed else 0.0
+            s_score = sparse_normed[pid][0] if pid in sparse_normed else 0.0
+            final_score = dense_weight * d_score + sparse_weight * s_score
+            # Pick the result object from whichever source has it
+            result = (
+                dense_normed[pid][1] if pid in dense_normed
+                else sparse_normed[pid][1]
             )
+            combined.append((final_score, result))
+
+        # Sort by combined score descending, take top limit
+        combined.sort(key=lambda x: x[0], reverse=True)
+
+        chunks = []
+        for score, result in combined[:limit]:
+            chunk = self._result_to_chunk(result)
+            chunk.score = score
+            chunks.append(chunk)
 
         return chunks
 
