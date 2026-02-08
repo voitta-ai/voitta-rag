@@ -4,26 +4,59 @@ import asyncio
 import logging
 import os
 import shutil
+import stat
 import tempfile
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 from .base import BaseSyncConnector, RemoteFile
 
 logger = logging.getLogger(__name__)
 
 
+def _inject_token_into_url(repo_url: str, username: str, token: str) -> str:
+    """Rewrite an HTTPS repo URL to embed credentials.
+
+    https://github.com/org/repo  ->  https://user:token@github.com/org/repo
+    """
+    parsed = urlparse(repo_url)
+    retval = urlunparse(parsed._replace(
+        netloc=f"{username}:{token}@{parsed.hostname}"
+        + (f":{parsed.port}" if parsed.port else "")
+    ))
+    return retval
+
+
 async def _run_git_cmd(
     args: list[str],
     cwd: str | None = None,
     ssh_key: str | None = None,
+    token: str | None = None,
+    username: str | None = None,
     timeout: int = 30,
 ) -> tuple[int, str, str]:
-    """Run a git command asynchronously with optional SSH key."""
+    """Run a git command asynchronously with optional SSH key or HTTPS token."""
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     key_file = None
+    askpass_file = None
 
     try:
-        if ssh_key and ssh_key.strip():
+        if token and token.strip():
+            # HTTPS token auth via GIT_ASKPASS
+            user = (username or "x-access-token").strip()
+            askpass_file = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".sh", delete=False
+            )
+            askpass_file.write(f"#!/bin/sh\necho '{token.strip()}'\n")
+            askpass_file.close()
+            os.chmod(askpass_file.name, stat.S_IRWXU)
+            env["GIT_ASKPASS"] = askpass_file.name
+            # Also inject credentials into the URL for commands that take a URL arg
+            args = list(args)
+            for i, arg in enumerate(args):
+                if arg.startswith("https://"):
+                    args[i] = _inject_token_into_url(arg, user, token.strip())
+        elif ssh_key and ssh_key.strip():
             key_file = tempfile.NamedTemporaryFile(
                 mode="w", suffix=".key", delete=False
             )
@@ -33,11 +66,16 @@ async def _run_git_cmd(
             key_file.close()
             os.chmod(key_file.name, 0o600)
             env["GIT_SSH_COMMAND"] = (
-                f"ssh -i {key_file.name} -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+                f"ssh -i {key_file.name}"
+                " -F /dev/null"
+                " -o StrictHostKeyChecking=accept-new"
+                " -o BatchMode=yes"
             )
         else:
             env["GIT_SSH_COMMAND"] = (
-                "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes"
+                "ssh -F /dev/null"
+                " -o StrictHostKeyChecking=accept-new"
+                " -o BatchMode=yes"
             )
 
         proc = await asyncio.create_subprocess_exec(
@@ -56,13 +94,25 @@ async def _run_git_cmd(
                 os.unlink(key_file.name)
             except OSError:
                 pass
+        if askpass_file:
+            try:
+                os.unlink(askpass_file.name)
+            except OSError:
+                pass
 
 
-async def list_remote_branches(repo_url: str, ssh_key: str = "") -> list[str]:
+async def list_remote_branches(
+    repo_url: str,
+    ssh_key: str = "",
+    token: str = "",
+    username: str = "",
+) -> list[str]:
     """List branches of a remote git repo via `git ls-remote --heads`."""
     rc, stdout, stderr = await _run_git_cmd(
         ["ls-remote", "--heads", repo_url],
         ssh_key=ssh_key or None,
+        token=token or None,
+        username=username or None,
         timeout=15,
     )
     if rc != 0:
@@ -88,14 +138,23 @@ async def list_remote_branches(repo_url: str, ssh_key: str = "") -> list[str]:
 
 
 class GitHubConnector(BaseSyncConnector):
-    """Sync connector that uses git clone/pull for public and SSH repos."""
+    """Sync connector that uses git clone/pull for public, SSH, and token repos."""
 
     async def _run_git(
         self, args: list[str], cwd: str | None = None, source=None
     ) -> tuple[int, str, str]:
-        """Run a git command using the source's SSH key."""
-        ssh_key = getattr(source, "gh_token", None) if source else None
-        return await _run_git_cmd(args, cwd=cwd, ssh_key=ssh_key, timeout=300)
+        """Run a git command using the source's configured auth method."""
+        auth_method = getattr(source, "gh_auth_method", None) if source else None
+        if auth_method == "token":
+            token = getattr(source, "gh_pat", None)
+            username = getattr(source, "gh_username", None)
+            retval = await _run_git_cmd(
+                args, cwd=cwd, token=token, username=username, timeout=300
+            )
+        else:
+            ssh_key = getattr(source, "gh_token", None) if source else None
+            retval = await _run_git_cmd(args, cwd=cwd, ssh_key=ssh_key, timeout=300)
+        return retval
 
     async def list_files(self, source) -> list[RemoteFile]:
         """Not used — sync() is overridden to use git clone/pull directly."""

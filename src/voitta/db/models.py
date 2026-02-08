@@ -110,10 +110,13 @@ class FolderSyncSource(Base):
     gd_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # GitHub credentials
-    gh_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gh_token: Mapped[str | None] = mapped_column(String(500), nullable=True)  # SSH private key
     gh_repo: Mapped[str | None] = mapped_column(String(255), nullable=True)
     gh_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
     gh_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    gh_auth_method: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "ssh" or "token"
+    gh_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    gh_pat: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Azure DevOps credentials
     ado_tenant_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

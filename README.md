@@ -37,32 +37,37 @@ pip install "transformers>=4.36.0,<5.0.0"
 
 ## Quick Start
 
-### 1. Start Qdrant (Vector Database)
+### Option A: Docker (recommended)
+
+Starts both voitta-rag and Qdrant with persistent storage via Docker Compose:
 
 ```bash
-# Create persistent storage directory
-mkdir -p qdrant_storage
-
-# Run Qdrant with Docker
-docker run -d \
-  --name qdrant \
-  -p 6333:6333 \
-  -p 6334:6334 \
-  -v $(pwd)/qdrant_storage:/qdrant/storage \
-  qdrant/qdrant
+cp .env.example .env
+make docker-up
 ```
 
-### 2. Install and Run
+Open http://localhost:58000 in your browser. Stop with `make docker-down`.
+
+By default, `~/.ssh` is mounted read-only into the container for SSH-based git access. Override with:
 
 ```bash
-# Install dependencies
-pip install -e ".[dev]"
+SSH_KEY_DIR=/path/to/ssh/keys docker compose up -d --build
+```
 
-# Copy environment template and configure
+### Option B: Local development
+
+```bash
+# Start Qdrant
+mkdir -p qdrant_storage
+docker run -d --name qdrant \
+  -p 6333:6333 -p 6334:6334 \
+  -v $(pwd)/qdrant_storage:/qdrant/storage \
+  qdrant/qdrant
+
+# Install and run
+make install
 cp .env.example .env
-
-# Run the server (binds to 0.0.0.0:8000 by default)
-uvicorn src.voitta.main:app --reload --host 0.0.0.0
+make run
 ```
 
 Open http://localhost:8000 in your browser.
@@ -134,6 +139,43 @@ The MCP server runs on port 8001 by default. Configure via `.env`:
   }
 }
 ```
+
+## Bulk Repository Import
+
+Import multiple Git repositories at once using a JSON config file:
+
+```bash
+python3 scripts/import_repos.py [path/to/config.json]
+```
+
+Defaults to `scripts/import_repos.json`. Copy the example to get started:
+
+```bash
+cp scripts/import_repos.example.json scripts/import_repos.json
+```
+
+The config specifies per-host auth and folders with repo lists:
+
+```json
+{
+    "hosts": {
+        "github.com": {"auth_method": "ssh"},
+        "git.example.com": {
+            "auth_method": "token",
+            "username": "your-username",
+            "token": "your-pat-token"
+        }
+    },
+    "folders": {
+        "my-repos": [
+            {"repo": "git@github.com:org/repo.git"},
+            {"repo": "https://git.example.com/team/project.git", "branch": "develop"}
+        ]
+    }
+}
+```
+
+Branch is auto-detected from the remote when not specified. The `import_repos.json` file is gitignored (may contain credentials).
 
 ## Features
 
