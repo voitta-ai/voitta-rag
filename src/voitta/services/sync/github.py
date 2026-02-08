@@ -182,6 +182,9 @@ class GitHubConnector(BaseSyncConnector):
         for src_file in source_dir.rglob("*"):
             if src_file.is_dir():
                 continue
+            if src_file.is_symlink() and not src_file.exists():
+                logger.debug("Skipping broken symlink: %s", src_file)
+                continue
             rel = src_file.relative_to(source_dir)
             # Skip .git directory and hidden files
             parts = rel.parts

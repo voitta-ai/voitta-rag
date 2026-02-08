@@ -40,6 +40,9 @@ class Settings:
         self.chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "50"))
         self.chunking_strategy: str = os.getenv("CHUNKING_STRATEGY", "recursive")
 
+        # Sparse/hybrid search weight (0=dense only, 1=sparse only)
+        self.sparse_weight: float = float(os.getenv("SPARSE_WEIGHT", "0.1"))
+
         # PDF bucketing settings (splitting large PDFs for processing)
         self.pdf_pages_per_bucket: int = int(os.getenv("PDF_PAGES_PER_BUCKET", "20"))
 
