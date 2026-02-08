@@ -100,20 +100,37 @@ def init_db() -> None:
 
     sync_engine = get_sync_engine()
 
+    # Enable WAL mode for concurrent access
+    from sqlalchemy import text
+    with sync_engine.connect() as conn:
+        conn.execute(text("PRAGMA journal_mode=WAL"))
+        conn.commit()
+
     # Create all tables
     Base.metadata.create_all(bind=sync_engine)
 
     # Add any new columns to existing tables
     _migrate_missing_columns(sync_engine)
 
-    # Seed default users
-    with Session(sync_engine) as session:
-        default_users = ["Roman", "Nadya", "Greg"]
-        for name in default_users:
-            existing = session.query(User).filter(User.name == name).first()
-            if not existing:
-                session.add(User(name=name))
-        session.commit()
+    # Seed users from users.txt if enabled
+    import os
+    from pathlib import Path
+
+    seed_enabled = os.getenv("VOITTA_SEED_USERS", "false").lower() == "true"
+    if seed_enabled:
+        users_file = Path(os.getenv("VOITTA_USERS_FILE", "users.txt"))
+        if users_file.exists():
+            names = [
+                line.strip()
+                for line in users_file.read_text().splitlines()
+                if line.strip()
+            ]
+            with Session(sync_engine) as session:
+                for name in names:
+                    existing = session.query(User).filter(User.name == name).first()
+                    if not existing:
+                        session.add(User(name=name))
+                session.commit()
 
 
 def reset_engines() -> None:

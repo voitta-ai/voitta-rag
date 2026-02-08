@@ -6,7 +6,6 @@ build-backend = "hatchling.build"
 name = "voitta-rag"
 version = "0.1.0"
 description = "Web-based file management system with real-time monitoring"
-readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.109.0",

@@ -1,0 +1,22 @@
+{
+    "hosts": {
+        "github.com": {
+            "auth_method": "ssh"
+        },
+        "git.example.com": {
+            "auth_method": "token",
+            "username": "your-username",
+            "token": "your-pat-token"
+        }
+    },
+    "folders": {
+        "my-github-repos": [
+            {"repo": "git@github.com:myorg/repo-one.git"},
+            {"repo": "git@github.com:myorg/repo-two.git", "branch": "develop"}
+        ],
+        "my-enterprise-repos": [
+            {"repo": "https://git.example.com/team/project-a.git"},
+            {"repo": "https://git.example.com/team/project-b.git"}
+        ]
+    }
+}

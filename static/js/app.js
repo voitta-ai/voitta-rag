@@ -966,7 +966,11 @@ function populateSyncFields(data) {
     } else if (data.source_type === 'github' && data.github) {
         document.getElementById('gh-repo').value = data.github.repo || '';
         document.getElementById('gh-path').value = data.github.path || '';
+        document.getElementById('gh-auth-method').value = data.github.auth_method || 'ssh';
         document.getElementById('gh-ssh-key').value = data.github.ssh_key || '';
+        document.getElementById('gh-username').value = data.github.username || '';
+        document.getElementById('gh-pat').value = data.github.token || '';
+        toggleGhAuth();
         // Fetch branches and pre-select the saved one
         const savedBranch = data.github.branch || 'main';
         if (data.github.repo) {
@@ -1114,7 +1118,10 @@ function gatherSyncConfig() {
             repo: document.getElementById('gh-repo').value.trim(),
             branch: document.getElementById('gh-branch').value.trim() || 'main',
             path: document.getElementById('gh-path').value.trim(),
+            auth_method: document.getElementById('gh-auth-method').value,
             ssh_key: document.getElementById('gh-ssh-key').value.trim(),
+            username: document.getElementById('gh-username').value.trim(),
+            token: document.getElementById('gh-pat').value.trim(),
         };
     } else if (sourceType === 'azure_devops') {
         config.azure_devops = {
@@ -1191,6 +1198,9 @@ async function triggerRemoteSync() {
     }
 
     try {
+        // Auto-save config before syncing
+        await saveSyncSource();
+
         const response = await fetch(`/api/sync/${encodeURIComponent(targetPath)}/trigger`, {
             method: 'POST',
         });
@@ -1227,16 +1237,28 @@ function updateSpConnectStatus(connected) {
 }
 
 let _lastBranchUrl = '';
-let _lastBranchKey = '';
+let _lastBranchCred = '';
+
+function toggleGhAuth() {
+    const method = document.getElementById('gh-auth-method').value;
+    document.getElementById('gh-ssh-fields').style.display = method === 'ssh' ? '' : 'none';
+    document.getElementById('gh-token-fields').style.display = method === 'token' ? '' : 'none';
+}
 
 async function fetchGitBranches(preselectBranch) {
     const repoUrl = document.getElementById('gh-repo').value.trim();
+    const authMethod = document.getElementById('gh-auth-method').value;
     const sshKey = document.getElementById('gh-ssh-key').value.trim();
+    const ghUsername = document.getElementById('gh-username').value.trim();
+    const ghPat = document.getElementById('gh-pat').value.trim();
     const branchSelect = document.getElementById('gh-branch');
     if (!repoUrl) return;
 
-    // Avoid duplicate fetches for the same URL+key combo
-    if (repoUrl === _lastBranchUrl && sshKey === _lastBranchKey) {
+    // Build a cache key from all credential fields
+    const credKey = authMethod + '|' + sshKey + '|' + ghUsername + '|' + ghPat;
+
+    // Avoid duplicate fetches for the same URL+credential combo
+    if (repoUrl === _lastBranchUrl && credKey === _lastBranchCred) {
         if (preselectBranch) branchSelect.value = preselectBranch;
         return;
     }
@@ -1248,7 +1270,12 @@ async function fetchGitBranches(preselectBranch) {
 
     try {
         const params = new URLSearchParams({ repo_url: repoUrl });
-        if (sshKey) params.set('ssh_key', sshKey);
+        if (authMethod === 'token') {
+            if (ghPat) params.set('token', ghPat);
+            if (ghUsername) params.set('username', ghUsername);
+        } else {
+            if (sshKey) params.set('ssh_key', sshKey);
+        }
         const resp = await fetch(`/api/sync/git/branches?${params}`);
         if (!resp.ok) {
             const err = await resp.json().catch(() => ({}));
@@ -1275,7 +1302,7 @@ async function fetchGitBranches(preselectBranch) {
         }
 
         _lastBranchUrl = repoUrl;
-        _lastBranchKey = sshKey;
+        _lastBranchCred = credKey;
     } catch (e) {
         branchSelect.innerHTML = '<option value="main">main</option>';
         console.warn('Failed to fetch branches:', e.message);
