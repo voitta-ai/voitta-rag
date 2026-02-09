@@ -125,6 +125,8 @@ class FileWatcher:
         # Handle file/folder deletions - remove associated chunks from vector store
         if event.event_type == EventType.DELETED:
             self._handle_deletion(event)
+        elif event.event_type == EventType.CREATED and event.is_dir:
+            self._handle_dir_creation(event)
 
         # Schedule the async notification in the event loop
         asyncio.run_coroutine_threadsafe(self._notify_subscribers(event), self._loop)
@@ -152,6 +154,65 @@ class FileWatcher:
                 db.commit()
         except Exception as e:
             logger.error(f"Error handling deletion for {event.path}: {e}")
+
+    def _handle_dir_creation(self, event: FileEvent) -> None:
+        """Inherit parent folder settings for newly created directories."""
+        from sqlalchemy import select
+
+        from ..db.models import UserFolderSetting
+
+        try:
+            engine = get_sync_engine()
+            with Session(engine) as db:
+                # Build ancestor paths from closest to farthest
+                parts = Path(event.path).parts
+                ancestor_paths: list[str] = []
+                for i in range(len(parts) - 1, 0, -1):
+                    ancestor_paths.append(str(Path(*parts[:i])))
+                ancestor_paths.append("")  # root
+
+                for ancestor in ancestor_paths:
+                    result = db.execute(
+                        select(UserFolderSetting).where(
+                            UserFolderSetting.folder_path == ancestor,
+                        )
+                    )
+                    parent_settings = result.scalars().all()
+
+                    if not parent_settings:
+                        continue
+
+                    # Check which users already have settings for this new path
+                    existing = db.execute(
+                        select(UserFolderSetting.user_id).where(
+                            UserFolderSetting.folder_path == event.path,
+                        )
+                    )
+                    existing_user_ids = {row[0] for row in existing.fetchall()}
+
+                    created = False
+                    for ps in parent_settings:
+                        if ps.user_id in existing_user_ids:
+                            continue
+                        if ps.search_active or ps.enabled:
+                            db.add(
+                                UserFolderSetting(
+                                    user_id=ps.user_id,
+                                    folder_path=event.path,
+                                    enabled=ps.enabled,
+                                    search_active=ps.search_active,
+                                )
+                            )
+                            created = True
+
+                    if created:
+                        db.commit()
+                        logger.info(
+                            f"Inherited folder settings for new directory: {event.path}"
+                        )
+                    break  # Only inherit from closest ancestor with settings
+        except Exception as e:
+            logger.error(f"Error inheriting folder settings for {event.path}: {e}")
 
     async def _notify_subscribers(self, event: FileEvent):
         """Notify all subscribers of an event."""
