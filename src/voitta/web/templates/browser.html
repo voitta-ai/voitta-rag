@@ -140,6 +140,9 @@
                         <option value="google_drive">Google Drive</option>
                         <option value="github">Git</option>
                         <option value="azure_devops">Azure DevOps</option>
+                        <option value="jira">Jira</option>
+                        <option value="confluence">Confluence</option>
+                        <option value="box">Box</option>
                     </select>
                 </div>
 
@@ -259,6 +262,65 @@
                             Connect
                         </button>
                         <span class="sp-connect-status" id="ado-connect-status"></span>
+                    </div>
+                </div>
+
+                <!-- Jira Fields -->
+                <div id="sync-fields-jira" class="sync-fields" style="display: none;">
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Jira URL</label>
+                        <input type="text" id="jira-url" class="sync-input" placeholder="https://jira.example.com">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Project Key</label>
+                        <input type="text" id="jira-project" class="sync-input" placeholder="PROJ">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Personal Access Token</label>
+                        <input type="text" id="jira-token" class="sync-input" placeholder="Your Jira PAT">
+                    </div>
+                </div>
+
+                <!-- Confluence Fields -->
+                <div id="sync-fields-confluence" class="sync-fields" style="display: none;">
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Confluence URL</label>
+                        <input type="text" id="confluence-url" class="sync-input" placeholder="https://confluence.example.com">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Space Key</label>
+                        <input type="text" id="confluence-space" class="sync-input" placeholder="DAIHUB">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Personal Access Token</label>
+                        <input type="text" id="confluence-token" class="sync-input" placeholder="Your Confluence PAT">
+                    </div>
+                </div>
+
+                <!-- Box Fields -->
+                <div id="sync-fields-box" class="sync-fields" style="display: none;">
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Client ID</label>
+                        <input type="text" id="box-client-id" class="sync-input" placeholder="Box app client ID">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Client Secret</label>
+                        <input type="text" id="box-client-secret" class="sync-input" placeholder="Box app client secret">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Folder ID / URL</label>
+                        <input type="text" id="box-folder-id" class="sync-input" placeholder="12345 or https://nike.ent.box.com/folder/12345">
+                    </div>
+                    <div class="sp-connect-row">
+                        <button class="btn btn-secondary btn-sm" id="btn-box-connect" onclick="connectBox()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                                <polyline points="10 17 15 12 10 7"></polyline>
+                                <line x1="15" y1="12" x2="3" y2="12"></line>
+                            </svg>
+                            Connect
+                        </button>
+                        <span class="sp-connect-status" id="box-connect-status"></span>
                     </div>
                 </div>
 
