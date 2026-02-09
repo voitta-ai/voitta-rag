@@ -12,6 +12,9 @@ class TextParser(BaseParser):
         # Plain text and documentation
         ".txt",
         ".md",
+        ".mdx",
+        ".j2",
+        ".jinja",
         ".rst",
         ".adoc",
         # Python

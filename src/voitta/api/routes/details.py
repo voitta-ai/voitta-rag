@@ -157,6 +157,9 @@ async def _get_file_type_stats(fs: Filesystem, db: DB, folder_path: str) -> list
 
     for item in abs_folder_path.rglob("*"):
         if item.is_file() and not item.name.startswith("."):
+            # Skip files in hidden directories (matches indexing.py logic)
+            if any(part.startswith(".") for part in item.relative_to(abs_folder_path).parts):
+                continue
             ext = item.suffix.lower() if item.suffix else "(no extension)"
             ext_counts[ext] += 1
 
