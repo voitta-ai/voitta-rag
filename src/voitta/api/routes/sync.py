@@ -56,12 +56,34 @@ class AzureDevOpsConfig(BaseModel):
     connected: bool = False
 
 
+class JiraConfig(BaseModel):
+    url: str  # https://jira.example.com or https://jira.example.com/browse/PROJ
+    project: str = ""  # Project key (e.g., PROJ)
+    token: str = ""  # Personal Access Token
+
+
+class ConfluenceConfig(BaseModel):
+    url: str  # https://confluence.example.com
+    space: str = ""  # Space key (e.g., DAIHUB)
+    token: str = ""  # Personal Access Token
+
+
+class BoxConfig(BaseModel):
+    client_id: str = ""
+    client_secret: str = ""
+    folder_id: str = ""
+    connected: bool = False
+
+
 class UpsertSyncSourceRequest(BaseModel):
     source_type: str
     sharepoint: SharePointConfig | None = None
     google_drive: GoogleDriveConfig | None = None
     github: GitHubConfig | None = None
     azure_devops: AzureDevOpsConfig | None = None
+    jira: JiraConfig | None = None
+    confluence: ConfluenceConfig | None = None
+    box: BoxConfig | None = None
 
 
 class SyncSourceResponse(BaseModel):
@@ -74,6 +96,9 @@ class SyncSourceResponse(BaseModel):
     google_drive: GoogleDriveConfig | None = None
     github: GitHubConfig | None = None
     azure_devops: AzureDevOpsConfig | None = None
+    jira: JiraConfig | None = None
+    confluence: ConfluenceConfig | None = None
+    box: BoxConfig | None = None
 
 
 class SyncStatusResponse(BaseModel):
@@ -97,6 +122,9 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
     gd = None
     gh = None
     ado = None
+    jira = None
+    confluence = None
+    box = None
 
     if source.source_type == "sharepoint":
         sp = SharePointConfig(
@@ -132,6 +160,25 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
             project=source.ado_project or "",
             connected=bool(source.ado_refresh_token),
         )
+    elif source.source_type == "jira":
+        jira = JiraConfig(
+            url=source.jira_url or "",
+            project=source.jira_project or "",
+            token=source.jira_token or "",
+        )
+    elif source.source_type == "confluence":
+        confluence = ConfluenceConfig(
+            url=source.confluence_url or "",
+            space=source.confluence_space or "",
+            token=source.confluence_token or "",
+        )
+    elif source.source_type == "box":
+        box = BoxConfig(
+            client_id=source.box_client_id or "",
+            client_secret=source.box_client_secret or "",
+            folder_id=source.box_folder_id or "",
+            connected=bool(source.box_refresh_token),
+        )
 
     return SyncSourceResponse(
         folder_path=source.folder_path,
@@ -143,6 +190,9 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
         google_drive=gd,
         github=gh,
         azure_devops=ado,
+        jira=jira,
+        confluence=confluence,
+        box=box,
     )
 
 
@@ -187,6 +237,12 @@ _OAUTH_SOURCES = {
         "auth_fn": "services.sync.azure_devops",
         "ws_event": "ado_connected",
     },
+    "box": {
+        "client_id": "box_client_id",
+        "client_secret": "box_client_secret",
+        "refresh_token": "box_refresh_token",
+        "ws_event": "box_connected",
+    },
 }
 
 
@@ -211,17 +267,26 @@ async def oauth_callback(
 
         cfg = _OAUTH_SOURCES[source.source_type]
 
-        from ...services.sync.azure_devops import exchange_code_for_tokens as ado_exchange
-        from ...services.sync.sharepoint import exchange_code_for_tokens as sp_exchange
+        if source.source_type == "box":
+            from ...services.sync.box import exchange_code_for_tokens as box_exchange
+            tokens = await box_exchange(
+                client_id=getattr(source, cfg["client_id"]),
+                client_secret=getattr(source, cfg["client_secret"]),
+                code=code,
+                redirect_uri=_get_oauth_redirect_uri(),
+            )
+        else:
+            from ...services.sync.azure_devops import exchange_code_for_tokens as ado_exchange
+            from ...services.sync.sharepoint import exchange_code_for_tokens as sp_exchange
 
-        exchange_fn = ado_exchange if source.source_type == "azure_devops" else sp_exchange
-        tokens = await exchange_fn(
-            tenant_id=getattr(source, cfg["tenant_id"]),
-            client_id=getattr(source, cfg["client_id"]),
-            client_secret=getattr(source, cfg["client_secret"]),
-            code=code,
-            redirect_uri=_get_oauth_redirect_uri(),
-        )
+            exchange_fn = ado_exchange if source.source_type == "azure_devops" else sp_exchange
+            tokens = await exchange_fn(
+                tenant_id=getattr(source, cfg["tenant_id"]),
+                client_id=getattr(source, cfg["client_id"]),
+                client_secret=getattr(source, cfg["client_secret"]),
+                code=code,
+                redirect_uri=_get_oauth_redirect_uri(),
+            )
         setattr(source, cfg["refresh_token"], tokens["refresh_token"])
 
     from ...services.watcher import file_watcher
@@ -258,27 +323,41 @@ async def oauth_auth_initiate(
         raise HTTPException(status_code=404, detail="OAuth sync source not found")
 
     cfg = _OAUTH_SOURCES[source.source_type]
-    tenant_id = getattr(source, cfg["tenant_id"])
     client_id = getattr(source, cfg["client_id"])
 
-    if not tenant_id or not client_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Save configuration (tenant ID, client ID, etc.) before connecting",
+    if source.source_type == "box":
+        if not client_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Save configuration (client ID, client secret) before connecting",
+            )
+
+        from ...services.sync.box import get_auth_url as box_auth_url
+        state = base64.urlsafe_b64encode(source.folder_path.encode()).decode()
+        auth_url = box_auth_url(
+            client_id=client_id,
+            redirect_uri=_get_oauth_redirect_uri(),
+            state=state,
         )
+    else:
+        tenant_id = getattr(source, cfg["tenant_id"])
+        if not tenant_id or not client_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Save configuration (tenant ID, client ID, etc.) before connecting",
+            )
 
-    from ...services.sync.azure_devops import get_auth_url as ado_auth_url
-    from ...services.sync.sharepoint import get_auth_url as sp_auth_url
+        from ...services.sync.azure_devops import get_auth_url as ado_auth_url
+        from ...services.sync.sharepoint import get_auth_url as sp_auth_url
 
-    get_auth_url_fn = ado_auth_url if source.source_type == "azure_devops" else sp_auth_url
-    state = base64.urlsafe_b64encode(source.folder_path.encode()).decode()
-
-    auth_url = get_auth_url_fn(
-        tenant_id=tenant_id,
-        client_id=client_id,
-        redirect_uri=_get_oauth_redirect_uri(),
-        state=state,
-    )
+        get_auth_url_fn = ado_auth_url if source.source_type == "azure_devops" else sp_auth_url
+        state = base64.urlsafe_b64encode(source.folder_path.encode()).decode()
+        auth_url = get_auth_url_fn(
+            tenant_id=tenant_id,
+            client_id=client_id,
+            redirect_uri=_get_oauth_redirect_uri(),
+            state=state,
+        )
 
     return {"auth_url": auth_url}
 
@@ -423,7 +502,7 @@ async def upsert_sync_source(
             detail="Sync can only be configured on empty folders",
         )
 
-    if request.source_type not in ("sharepoint", "google_drive", "github", "azure_devops"):
+    if request.source_type not in ("sharepoint", "google_drive", "github", "azure_devops", "jira", "confluence", "box"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown source type: {request.source_type}",
@@ -446,6 +525,9 @@ async def upsert_sync_source(
         "gh_auth_method", "gh_username", "gh_pat",
         "ado_tenant_id", "ado_client_id", "ado_client_secret", "ado_refresh_token",
         "ado_organization", "ado_project", "ado_url",
+        "jira_url", "jira_project", "jira_token",
+        "confluence_url", "confluence_space", "confluence_token",
+        "box_client_id", "box_client_secret", "box_folder_id", "box_refresh_token",
     ):
         setattr(source, field, None)
 
@@ -480,6 +562,34 @@ async def upsert_sync_source(
         except ValueError:
             source.ado_organization = request.azure_devops.organization
             source.ado_project = request.azure_devops.project
+    elif request.source_type == "jira" and request.jira:
+        from ...services.sync.jira import _parse_jira_url
+        source.jira_token = request.jira.token
+        # Try to parse URL for base URL and project
+        try:
+            base_url, project_key = _parse_jira_url(request.jira.url)
+            source.jira_url = base_url
+            # Use parsed project if no explicit project provided
+            source.jira_project = request.jira.project or project_key
+        except ValueError:
+            source.jira_url = request.jira.url
+            source.jira_project = request.jira.project
+    elif request.source_type == "confluence" and request.confluence:
+        source.confluence_url = request.confluence.url.rstrip("/")
+        source.confluence_space = request.confluence.space.upper()
+        source.confluence_token = request.confluence.token
+    elif request.source_type == "box" and request.box:
+        source.box_client_id = request.box.client_id
+        source.box_client_secret = request.box.client_secret
+        # Accept folder ID or full Box URL and extract the ID
+        folder_id = request.box.folder_id.strip()
+        if "/" in folder_id:
+            # Extract trailing numeric ID from URL like https://nike.ent.box.com/folder/12345
+            import re
+            m = re.search(r"/folder/(\d+)", folder_id)
+            if m:
+                folder_id = m.group(1)
+        source.box_folder_id = folder_id
 
     await db.flush()
     return _to_response(source)

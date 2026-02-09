@@ -80,6 +80,9 @@ function initWebSocket() {
             case 'ado_connected':
                 handleAdoConnectedEvent(data);
                 break;
+            case 'box_connected':
+                handleBoxConnectedEvent(data);
+                break;
             default:
                 // Filesystem events: created, deleted, modified, moved
                 handleFileSystemEvent(data);
@@ -108,25 +111,7 @@ function handleFileSystemEvent(event) {
     );
 
     if (!inBusyFolder) {
-        let message = '';
-        switch (event.type) {
-            case 'created':
-                message = `${event.is_dir ? 'Folder' : 'File'} created: ${event.path}`;
-                break;
-            case 'deleted':
-                message = `${event.is_dir ? 'Folder' : 'File'} deleted: ${event.path}`;
-                break;
-            case 'modified':
-                message = `File modified: ${event.path}`;
-                break;
-            case 'moved':
-                message = `Moved: ${event.path} → ${event.dest_path}`;
-                break;
-        }
-
-        if (message) {
-            showToast(message, 'info');
-        }
+        // Silently refresh — no per-file toasts
     }
 
     // Refresh file list if we're in the affected directory (skip during bulk ops)
@@ -168,11 +153,7 @@ function handleSyncStatusEvent(event) {
                 refreshFileList();
             }
         }
-        if (event.sync_status === 'synced') {
-            showToast(`Sync complete: ${folderPath}`, 'success');
-        } else if (event.sync_status === 'error') {
-            showToast(`Sync failed: ${folderPath}`, 'error');
-        }
+        // Status is already reflected in the sidebar UI — no toast needed
     }
 }
 
@@ -227,7 +208,6 @@ function handleIndexCompleteEvent(event) {
         }
     }
 
-    showToast(`Indexing complete: ${event.files_indexed} files, ${event.total_chunks} chunks`, 'success');
 }
 
 function handleSpConnectedEvent(event) {
@@ -251,6 +231,17 @@ function handleAdoConnectedEvent(event) {
         updateAdoConnectStatus(true);
         loadSyncSource(folderPath);
         showToast('Azure DevOps connected successfully', 'success');
+    }
+}
+
+function handleBoxConnectedEvent(event) {
+    // event: { type: 'box_connected', path }
+    const folderPath = event.path;
+
+    if (selectedPath === folderPath || currentPath === folderPath) {
+        updateBoxConnectStatus(true);
+        loadSyncSource(folderPath);
+        showToast('Box connected successfully', 'success');
     }
 }
 
@@ -307,6 +298,7 @@ async function refreshFileList() {
 async function uploadFiles(files) {
     if (!files || files.length === 0) return;
 
+    const uploadErrors = [];
     for (const file of files) {
         const formData = new FormData();
         formData.append('file', file);
@@ -323,10 +315,17 @@ async function uploadFiles(files) {
                 throw new Error(error.detail || 'Upload failed');
             }
 
-            showToast(`Uploaded: ${file.name}`, 'success');
+            // upload ok
         } catch (error) {
-            showToast(`Failed to upload ${file.name}: ${error.message}`, 'error');
+            uploadErrors.push(file.name);
         }
+    }
+
+    // Show a single summary toast
+    if (uploadErrors.length > 0) {
+        showToast(`Upload: ${files.length - uploadErrors.length} ok, ${uploadErrors.length} failed`, 'error');
+    } else if (files.length > 1) {
+        showToast(`Uploaded ${files.length} files`, 'success');
     }
 
     // Clear the file input
@@ -984,6 +983,19 @@ function populateSyncFields(data) {
         document.getElementById('ado-client-secret').value = data.azure_devops.client_secret || '';
         document.getElementById('ado-url').value = data.azure_devops.url || '';
         updateAdoConnectStatus(data.azure_devops.connected);
+    } else if (data.source_type === 'jira' && data.jira) {
+        document.getElementById('jira-url').value = data.jira.url || '';
+        document.getElementById('jira-project').value = data.jira.project || '';
+        document.getElementById('jira-token').value = data.jira.token || '';
+    } else if (data.source_type === 'confluence' && data.confluence) {
+        document.getElementById('confluence-url').value = data.confluence.url || '';
+        document.getElementById('confluence-space').value = data.confluence.space || '';
+        document.getElementById('confluence-token').value = data.confluence.token || '';
+    } else if (data.source_type === 'box' && data.box) {
+        document.getElementById('box-client-id').value = data.box.client_id || '';
+        document.getElementById('box-client-secret').value = data.box.client_secret || '';
+        document.getElementById('box-folder-id').value = data.box.folder_id || '';
+        updateBoxConnectStatus(data.box.connected);
     }
 
     // Lock inputs and hide save/remove when folder has synced content
@@ -1129,6 +1141,24 @@ function gatherSyncConfig() {
             client_id: document.getElementById('ado-client-id').value.trim(),
             client_secret: document.getElementById('ado-client-secret').value.trim(),
             url: document.getElementById('ado-url').value.trim(),
+        };
+    } else if (sourceType === 'jira') {
+        config.jira = {
+            url: document.getElementById('jira-url').value.trim(),
+            project: document.getElementById('jira-project').value.trim(),
+            token: document.getElementById('jira-token').value.trim(),
+        };
+    } else if (sourceType === 'confluence') {
+        config.confluence = {
+            url: document.getElementById('confluence-url').value.trim(),
+            space: document.getElementById('confluence-space').value.trim(),
+            token: document.getElementById('confluence-token').value.trim(),
+        };
+    } else if (sourceType === 'box') {
+        config.box = {
+            client_id: document.getElementById('box-client-id').value.trim(),
+            client_secret: document.getElementById('box-client-secret').value.trim(),
+            folder_id: document.getElementById('box-folder-id').value.trim(),
         };
     }
 
@@ -1407,6 +1437,63 @@ async function connectAzureDevOps() {
         window.open(data.auth_url, '_blank');
 
         showToast('Sign in to Microsoft in the new tab. This page will update when done.', 'info');
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+function updateBoxConnectStatus(connected) {
+    const el = document.getElementById('box-connect-status');
+    const btn = document.getElementById('btn-box-connect');
+    if (!el) return;
+
+    if (connected) {
+        el.className = 'sp-connect-status connected';
+        el.textContent = 'Connected';
+        if (btn) btn.textContent = 'Reconnect';
+    } else {
+        el.className = 'sp-connect-status not-connected';
+        el.textContent = 'Not connected';
+        if (btn) btn.textContent = 'Connect';
+    }
+}
+
+async function connectBox() {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) {
+        showToast('No folder selected', 'error');
+        return;
+    }
+
+    const config = gatherSyncConfig();
+    if (!config) {
+        showToast('Select Box and fill in the fields first', 'error');
+        return;
+    }
+
+    try {
+        // Save config first
+        const saveResp = await fetch(`/api/sync/${encodeURIComponent(targetPath)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        });
+        if (!saveResp.ok) {
+            const error = await saveResp.json();
+            throw new Error(error.detail || 'Failed to save config');
+        }
+
+        // Get the auth URL (unified OAuth endpoint)
+        const resp = await fetch(`/api/sync/oauth/auth?folder_path=${encodeURIComponent(targetPath)}`);
+        if (!resp.ok) {
+            const error = await resp.json();
+            throw new Error(error.detail || 'Failed to start Box auth');
+        }
+
+        const data = await resp.json();
+        window.open(data.auth_url, '_blank');
+
+        showToast('Sign in to Box in the new tab. This page will update when done.', 'info');
     } catch (error) {
         showToast(error.message, 'error');
     }

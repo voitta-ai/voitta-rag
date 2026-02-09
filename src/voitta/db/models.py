@@ -127,6 +127,22 @@ class FolderSyncSource(Base):
     ado_project: Mapped[str | None] = mapped_column(String(255), nullable=True)
     ado_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
+    # Jira credentials
+    jira_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    jira_project: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    jira_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Confluence credentials
+    confluence_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    confluence_space: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    confluence_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    # Box credentials (OAuth 2.0)
+    box_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    box_client_secret: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    box_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    box_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Sync status tracking
     sync_status: Mapped[str] = mapped_column(String(20), default="idle")
     sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
