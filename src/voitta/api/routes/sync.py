@@ -32,8 +32,11 @@ class SharePointConfig(BaseModel):
 
 
 class GoogleDriveConfig(BaseModel):
-    service_account_json: str
-    folder_id: str
+    service_account_json: str = ""
+    client_id: str = ""
+    client_secret: str = ""
+    folder_id: str = ""
+    connected: bool = False
 
 
 class GitHubConfig(BaseModel):
@@ -138,7 +141,10 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
     elif source.source_type == "google_drive":
         gd = GoogleDriveConfig(
             service_account_json=source.gd_service_account_json or "",
+            client_id=source.gd_client_id or "",
+            client_secret=source.gd_client_secret or "",
             folder_id=source.gd_folder_id or "",
+            connected=bool(source.gd_refresh_token),
         )
     elif source.source_type == "github":
         gh = GitHubConfig(
@@ -243,6 +249,12 @@ _OAUTH_SOURCES = {
         "refresh_token": "box_refresh_token",
         "ws_event": "box_connected",
     },
+    "google_drive": {
+        "client_id": "gd_client_id",
+        "client_secret": "gd_client_secret",
+        "refresh_token": "gd_refresh_token",
+        "ws_event": "gd_connected",
+    },
 }
 
 
@@ -272,6 +284,14 @@ async def oauth_callback(
         if source.source_type == "box":
             from ...services.sync.box import exchange_code_for_tokens as box_exchange
             tokens = await box_exchange(
+                client_id=getattr(source, cfg["client_id"]),
+                client_secret=getattr(source, cfg["client_secret"]),
+                code=code,
+                redirect_uri=_get_oauth_redirect_uri(),
+            )
+        elif source.source_type == "google_drive":
+            from ...services.sync.google_drive import exchange_code_for_tokens as gd_exchange
+            tokens = await gd_exchange(
                 client_id=getattr(source, cfg["client_id"]),
                 client_secret=getattr(source, cfg["client_secret"]),
                 code=code,
@@ -330,20 +350,29 @@ async def oauth_auth_initiate(
     cfg = _OAUTH_SOURCES[source.source_type]
     client_id = getattr(source, cfg["client_id"])
 
-    if source.source_type == "box":
+    if source.source_type in ("box", "google_drive"):
         if not client_id:
             raise HTTPException(
                 status_code=400,
                 detail="Save configuration (client ID, client secret) before connecting",
             )
 
-        from ...services.sync.box import get_auth_url as box_auth_url
         state = base64.urlsafe_b64encode(source.folder_path.encode()).decode()
-        auth_url = box_auth_url(
-            client_id=client_id,
-            redirect_uri=_get_oauth_redirect_uri(),
-            state=state,
-        )
+
+        if source.source_type == "google_drive":
+            from ...services.sync.google_drive import get_auth_url as gd_auth_url
+            auth_url = gd_auth_url(
+                client_id=client_id,
+                redirect_uri=_get_oauth_redirect_uri(),
+                state=state,
+            )
+        else:
+            from ...services.sync.box import get_auth_url as box_auth_url
+            auth_url = box_auth_url(
+                client_id=client_id,
+                redirect_uri=_get_oauth_redirect_uri(),
+                state=state,
+            )
     else:
         tenant_id = getattr(source, cfg["tenant_id"])
         if not tenant_id or not client_id:
@@ -405,6 +434,33 @@ async def list_git_branches(
             repo_url, ssh_key=ssh_key, token=token, username=username
         )
         return {"branches": branches}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/google-drive/folders")
+async def list_google_drive_folders(
+    folder_path: str = Query(...),
+    user: CurrentUser = None,
+    db: DB = None,
+):
+    """List root-level Google Drive folders for a connected source."""
+    result = await db.execute(
+        select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
+    )
+    source = result.scalar_one_or_none()
+    if not source or source.source_type != "google_drive":
+        raise HTTPException(status_code=404, detail="Google Drive source not found")
+    if not source.gd_refresh_token:
+        raise HTTPException(status_code=400, detail="Google Drive not connected yet")
+
+    from ...services.sync.google_drive import list_root_folders
+
+    try:
+        result_data = await list_root_folders(
+            source.gd_client_id, source.gd_client_secret, source.gd_refresh_token
+        )
+        return result_data
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -524,10 +580,10 @@ async def upsert_sync_source(
     # Clear all credential fields first (preserve OAuth refresh tokens —
     # they are set by the OAuth callback, not by the save endpoint)
     source_type_changed = existing and existing.source_type != request.source_type
-    _oauth_tokens = {"sp_refresh_token", "ado_refresh_token", "box_refresh_token"}
+    _oauth_tokens = {"sp_refresh_token", "ado_refresh_token", "box_refresh_token", "gd_refresh_token"}
     for field in (
         "sp_tenant_id", "sp_client_id", "sp_client_secret", "sp_site_url", "sp_drive_id",
-        "gd_service_account_json", "gd_folder_id",
+        "gd_service_account_json", "gd_folder_id", "gd_client_id", "gd_client_secret",
         "gh_token", "gh_repo", "gh_branch", "gh_path",
         "gh_auth_method", "gh_username", "gh_pat",
         "ado_tenant_id", "ado_client_id", "ado_client_secret",
@@ -552,6 +608,8 @@ async def upsert_sync_source(
         source.sp_drive_id = request.sharepoint.drive_id
     elif request.source_type == "google_drive" and request.google_drive:
         source.gd_service_account_json = request.google_drive.service_account_json
+        source.gd_client_id = request.google_drive.client_id
+        source.gd_client_secret = request.google_drive.client_secret
         source.gd_folder_id = request.google_drive.folder_id
     elif request.source_type == "github" and request.github:
         source.gh_repo = request.github.repo

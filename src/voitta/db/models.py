@@ -108,6 +108,9 @@ class FolderSyncSource(Base):
     # Google Drive credentials
     gd_service_account_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     gd_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    gd_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    gd_client_secret: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gd_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # GitHub credentials
     gh_token: Mapped[str | None] = mapped_column(String(500), nullable=True)  # SSH private key
