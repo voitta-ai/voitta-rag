@@ -252,10 +252,12 @@ async def oauth_callback(
     state: str = Query(...),
 ):
     """Unified OAuth2 callback — dispatches by source_type."""
+    logger.info("OAuth callback received, state=%s", state[:40])
     try:
         folder_path = base64.urlsafe_b64decode(state.encode()).decode()
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid state parameter")
+    logger.info("OAuth callback for folder_path=%s", folder_path)
 
     async with get_db_context() as db:
         result = await db.execute(
@@ -288,6 +290,9 @@ async def oauth_callback(
                 redirect_uri=_get_oauth_redirect_uri(),
             )
         setattr(source, cfg["refresh_token"], tokens["refresh_token"])
+        logger.info("OAuth token saved for %s (token field=%s, len=%d)",
+                     folder_path, cfg["refresh_token"],
+                     len(tokens.get("refresh_token", "") or ""))
 
     from ...services.watcher import file_watcher
     await file_watcher.broadcast({
@@ -516,20 +521,27 @@ async def upsert_sync_source(
 
     source.source_type = request.source_type
 
-    # Clear all credential fields first
+    # Clear all credential fields first (preserve OAuth refresh tokens —
+    # they are set by the OAuth callback, not by the save endpoint)
+    source_type_changed = existing and existing.source_type != request.source_type
+    _oauth_tokens = {"sp_refresh_token", "ado_refresh_token", "box_refresh_token"}
     for field in (
         "sp_tenant_id", "sp_client_id", "sp_client_secret", "sp_site_url", "sp_drive_id",
-        "sp_refresh_token",
         "gd_service_account_json", "gd_folder_id",
         "gh_token", "gh_repo", "gh_branch", "gh_path",
         "gh_auth_method", "gh_username", "gh_pat",
-        "ado_tenant_id", "ado_client_id", "ado_client_secret", "ado_refresh_token",
+        "ado_tenant_id", "ado_client_id", "ado_client_secret",
         "ado_organization", "ado_project", "ado_url",
         "jira_url", "jira_project", "jira_token",
         "confluence_url", "confluence_space", "confluence_token",
-        "box_client_id", "box_client_secret", "box_folder_id", "box_refresh_token",
+        "box_client_id", "box_client_secret", "box_folder_id",
     ):
         setattr(source, field, None)
+    # Clear OAuth tokens only when source type changes (they are set by the
+    # OAuth callback, not by the save endpoint)
+    if source_type_changed or not existing:
+        for field in _oauth_tokens:
+            setattr(source, field, None)
 
     # Set connector-specific fields
     if request.source_type == "sharepoint" and request.sharepoint:
