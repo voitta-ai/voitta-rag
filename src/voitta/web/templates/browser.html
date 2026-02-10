@@ -184,12 +184,29 @@
                 <!-- Google Drive Fields -->
                 <div id="sync-fields-google_drive" class="sync-fields" style="display: none;">
                     <div class="form-group-compact">
-                        <label class="form-label-compact">Service Account JSON</label>
-                        <textarea id="gd-service-account-json" class="sync-textarea" rows="4" placeholder="Paste service account JSON..."></textarea>
+                        <label class="form-label-compact">Client ID</label>
+                        <input type="text" id="gd-client-id" class="sync-input" placeholder="GCP OAuth client ID">
                     </div>
                     <div class="form-group-compact">
-                        <label class="form-label-compact">Folder ID</label>
-                        <input type="text" id="gd-folder-id" class="sync-input" placeholder="Google Drive folder ID">
+                        <label class="form-label-compact">Client Secret</label>
+                        <input type="text" id="gd-client-secret" class="sync-input" placeholder="GCP OAuth client secret">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Folder</label>
+                        <select id="gd-folder-id" class="sync-select">
+                            <option value="">Select a folder...</option>
+                        </select>
+                    </div>
+                    <div class="sp-connect-row">
+                        <button class="btn btn-secondary btn-sm" id="btn-gd-connect" onclick="connectGoogleDrive()">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                                <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                                <polyline points="10 17 15 12 10 7"></polyline>
+                                <line x1="15" y1="12" x2="3" y2="12"></line>
+                            </svg>
+                            Connect
+                        </button>
+                        <span class="sp-connect-status" id="gd-connect-status"></span>
                     </div>
                 </div>
 

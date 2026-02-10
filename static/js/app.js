@@ -83,6 +83,9 @@ function initWebSocket() {
             case 'box_connected':
                 handleBoxConnectedEvent(data);
                 break;
+            case 'gd_connected':
+                handleGdConnectedEvent(data);
+                break;
             default:
                 // Filesystem events: created, deleted, modified, moved
                 handleFileSystemEvent(data);
@@ -242,6 +245,18 @@ function handleBoxConnectedEvent(event) {
         updateBoxConnectStatus(true);
         loadSyncSource(folderPath);
         showToast('Box connected successfully', 'success');
+    }
+}
+
+function handleGdConnectedEvent(event) {
+    // event: { type: 'gd_connected', path }
+    const folderPath = event.path;
+
+    if (selectedPath === folderPath || currentPath === folderPath) {
+        updateGdConnectStatus(true);
+        loadSyncSource(folderPath);
+        fetchGoogleDriveFolders();
+        showToast('Google Drive connected successfully', 'success');
     }
 }
 
@@ -960,8 +975,22 @@ function populateSyncFields(data) {
         document.getElementById('sp-drive-id').value = data.sharepoint.drive_id || '';
         updateSpConnectStatus(data.sharepoint.connected);
     } else if (data.source_type === 'google_drive' && data.google_drive) {
-        document.getElementById('gd-service-account-json').value = data.google_drive.service_account_json || '';
-        document.getElementById('gd-folder-id').value = data.google_drive.folder_id || '';
+        document.getElementById('gd-client-id').value = data.google_drive.client_id || '';
+        document.getElementById('gd-client-secret').value = data.google_drive.client_secret || '';
+        updateGdConnectStatus(data.google_drive.connected);
+        if (data.google_drive.connected) {
+            fetchGoogleDriveFolders(data.google_drive.folder_id || '');
+        } else {
+            const folderSelect = document.getElementById('gd-folder-id');
+            folderSelect.innerHTML = '<option value="">Select a folder...</option>';
+            if (data.google_drive.folder_id) {
+                const opt = document.createElement('option');
+                opt.value = data.google_drive.folder_id;
+                opt.textContent = data.google_drive.folder_id;
+                folderSelect.appendChild(opt);
+                folderSelect.value = data.google_drive.folder_id;
+            }
+        }
     } else if (data.source_type === 'github' && data.github) {
         document.getElementById('gh-repo').value = data.github.repo || '';
         document.getElementById('gh-path').value = data.github.path || '';
@@ -1122,7 +1151,8 @@ function gatherSyncConfig() {
         };
     } else if (sourceType === 'google_drive') {
         config.google_drive = {
-            service_account_json: document.getElementById('gd-service-account-json').value.trim(),
+            client_id: document.getElementById('gd-client-id').value.trim(),
+            client_secret: document.getElementById('gd-client-secret').value.trim(),
             folder_id: document.getElementById('gd-folder-id').value.trim(),
         };
     } else if (sourceType === 'github') {
@@ -1341,6 +1371,78 @@ async function fetchGitBranches(preselectBranch) {
     }
 }
 
+async function fetchGoogleDriveFolders(preselectFolder) {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) return;
+
+    const folderSelect = document.getElementById('gd-folder-id');
+    if (!folderSelect) return;
+
+    // Show loading state
+    const savedValue = preselectFolder || folderSelect.value;
+    folderSelect.innerHTML = '<option value="" disabled selected>Loading folders...</option>';
+    folderSelect.disabled = true;
+
+    try {
+        const resp = await fetch(`/api/sync/google-drive/folders?folder_path=${encodeURIComponent(targetPath)}`);
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || resp.statusText);
+        }
+        const data = await resp.json();
+        const myFolders = data.folders || [];
+        const sharedFolders = data.shared_folders || [];
+        const sharedDrives = data.shared_drives || [];
+
+        folderSelect.innerHTML = '<option value="">Select a folder...</option>';
+
+        if (myFolders.length) {
+            const myGroup = document.createElement('optgroup');
+            myGroup.label = 'My Drive';
+            myFolders.forEach(f => {
+                const opt = document.createElement('option');
+                opt.value = f.id;
+                opt.textContent = f.name;
+                myGroup.appendChild(opt);
+            });
+            folderSelect.appendChild(myGroup);
+        }
+
+        if (sharedDrives.length) {
+            const drivesGroup = document.createElement('optgroup');
+            drivesGroup.label = 'Shared Drives';
+            sharedDrives.forEach(f => {
+                const opt = document.createElement('option');
+                opt.value = f.id;
+                opt.textContent = f.name;
+                drivesGroup.appendChild(opt);
+            });
+            folderSelect.appendChild(drivesGroup);
+        }
+
+        if (sharedFolders.length) {
+            const sharedGroup = document.createElement('optgroup');
+            sharedGroup.label = 'Shared with me';
+            sharedFolders.forEach(f => {
+                const opt = document.createElement('option');
+                opt.value = f.id;
+                opt.textContent = f.name;
+                sharedGroup.appendChild(opt);
+            });
+            folderSelect.appendChild(sharedGroup);
+        }
+
+        if (savedValue) {
+            folderSelect.value = savedValue;
+        }
+    } catch (e) {
+        folderSelect.innerHTML = '<option value="">Select a folder...</option>';
+        console.warn('Failed to fetch Google Drive folders:', e.message);
+    } finally {
+        folderSelect.disabled = false;
+    }
+}
+
 async function connectSharePoint() {
     const targetPath = selectedPath || currentPath;
     if (!targetPath) {
@@ -1494,6 +1596,63 @@ async function connectBox() {
         window.open(data.auth_url, '_blank');
 
         showToast('Sign in to Box in the new tab. This page will update when done.', 'info');
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+function updateGdConnectStatus(connected) {
+    const el = document.getElementById('gd-connect-status');
+    const btn = document.getElementById('btn-gd-connect');
+    if (!el) return;
+
+    if (connected) {
+        el.className = 'sp-connect-status connected';
+        el.textContent = 'Connected';
+        if (btn) btn.textContent = 'Reconnect';
+    } else {
+        el.className = 'sp-connect-status not-connected';
+        el.textContent = 'Not connected';
+        if (btn) btn.textContent = 'Connect';
+    }
+}
+
+async function connectGoogleDrive() {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) {
+        showToast('No folder selected', 'error');
+        return;
+    }
+
+    const config = gatherSyncConfig();
+    if (!config) {
+        showToast('Select Google Drive and fill in the fields first', 'error');
+        return;
+    }
+
+    try {
+        // Save config first
+        const saveResp = await fetch(`/api/sync/${encodeURIComponent(targetPath)}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config),
+        });
+        if (!saveResp.ok) {
+            const error = await saveResp.json();
+            throw new Error(error.detail || 'Failed to save config');
+        }
+
+        // Get the auth URL (unified OAuth endpoint)
+        const resp = await fetch(`/api/sync/oauth/auth?folder_path=${encodeURIComponent(targetPath)}`);
+        if (!resp.ok) {
+            const error = await resp.json();
+            throw new Error(error.detail || 'Failed to start Google Drive auth');
+        }
+
+        const data = await resp.json();
+        window.open(data.auth_url, '_blank');
+
+        showToast('Sign in to Google in the new tab. This page will update when done.', 'info');
     } catch (error) {
         showToast(error.message, 'error');
     }
