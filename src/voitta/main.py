@@ -50,7 +50,7 @@ setup_logging()
 
 # Get MCP app early so we can use its lifespan
 settings = get_settings()
-mcp_app = mcp.http_app(transport=settings.mcp_transport)
+mcp_app = mcp.http_app(transport=settings.mcp_transport, stateless_http=True)
 mcp_app.add_middleware(UserHeaderMiddleware)
 
 

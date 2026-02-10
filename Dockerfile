@@ -5,11 +5,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends git openssh-cli
 
 WORKDIR /app
 
+# Install dependencies only (cached unless pyproject.toml changes)
 COPY pyproject.toml .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -c "import tomllib,pathlib;d=tomllib.loads(pathlib.Path('pyproject.toml').read_text());pathlib.Path('_deps.txt').write_text('\n'.join(d['project']['dependencies']))" \
+    && pip install -r _deps.txt \
+    && rm _deps.txt
+
+# Copy source and install package (fast — deps already cached)
 COPY src/ src/
 COPY static/ static/
-
-RUN pip install --no-cache-dir .
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --no-deps .
 
 EXPOSE 8000
 

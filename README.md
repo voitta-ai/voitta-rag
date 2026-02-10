@@ -100,45 +100,36 @@ MCP_PORT=8001
 
 ## MCP Server (for Claude Code integration)
 
-The MCP server exposes RAG capabilities for Claude Code and other MCP clients.
-
-### Start the MCP Server
-
-```bash
-# Run alongside the main app (in a separate terminal)
-python -m src.voitta.mcp_server
-```
-
-The MCP server runs on port 8001 by default. Configure via `.env`:
-- `MCP_PORT` - Server port (default: 8001)
-- `MCP_TRANSPORT` - `streamable-http` (default) or `sse` (required for Claude Code)
-
-### Available MCP Tools
-
-**`search`** - Semantic search across indexed documents
-- `query`: Search text
-- `limit`: Max results (default: 10)
-- `include_folders`: Optional list of folders to search within
-- `exclude_folders`: Optional list of folders to exclude
-
-**`list_indexed_folders`** - List all indexed folders with status and metadata
-
-**`get_file`** - Retrieve full content of an indexed file by path
+The MCP server runs embedded in the main app (no separate process needed) and exposes RAG capabilities via the [MCP protocol](https://modelcontextprotocol.io/).
 
 ### Claude Code Configuration
 
-1. Set `MCP_TRANSPORT=sse` in your `.env` file
-2. Add to your Claude Code MCP settings:
+Add to `~/.claude.json` under `mcpServers` (global) or in your project settings:
 
 ```json
 {
   "mcpServers": {
     "voitta-rag": {
-      "url": "http://localhost:8001/sse"
+      "type": "http",
+      "url": "http://localhost:58000/mcp/mcp"
     }
   }
 }
 ```
+
+> **Note:** The URL path is `/mcp/mcp` — FastMCP creates its endpoint at `/mcp` inside the app, which is itself mounted at `/mcp`. If running locally (not Docker), replace `58000` with `8000`.
+
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| **`search`** | Hybrid semantic + keyword search across indexed documents |
+| **`list_indexed_folders`** | List all indexed folders with status, file counts, and metadata |
+| **`get_file`** | Get full content of an indexed file |
+| **`get_chunk_range`** | Get a range of chunks from a file, merged with overlaps removed |
+| **`get_file_uri`** | Get a download URI for a file (for use with wget/curl) |
+| **`set_folder_active`** | Set folder visibility for search (requires `X-User-Name` header) |
+| **`get_folder_active_states`** | Get active/inactive state of all folders for current user |
 
 ## Bulk Repository Import
 

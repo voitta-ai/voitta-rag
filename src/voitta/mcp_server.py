@@ -785,7 +785,7 @@ def run_server():
 
     # Add middleware to extract user header
     # Access the underlying Starlette app and add middleware
-    app = mcp.http_app(transport=transport)
+    app = mcp.http_app(transport=transport, stateless_http=True)
     app.add_middleware(UserHeaderMiddleware)
 
     # Run with configured transport
