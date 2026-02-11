@@ -20,10 +20,15 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
-# GTX 1080 (compute 6.1) not supported by PyTorch 2.8+cu128
-# Would need PyTorch with CUDA 11.x for Pascal GPUs
-os.environ.setdefault("MINERU_DEVICE_MODE", "cpu")
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+# Auto-detect GPU: use CUDA if available, fall back to CPU
+try:
+    import torch
+    if torch.cuda.is_available():
+        os.environ.setdefault("MINERU_DEVICE_MODE", "cuda")
+    else:
+        os.environ.setdefault("MINERU_DEVICE_MODE", "cpu")
+except ImportError:
+    os.environ.setdefault("MINERU_DEVICE_MODE", "cpu")
 
 # Set up file logging
 SCRIPT_DIR = Path(__file__).parent.parent
