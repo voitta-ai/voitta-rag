@@ -53,7 +53,8 @@ async def _gather_file_list_data(path: str, user, fs, db):
                     if folder_key not in folder_stats:
                         folder_stats[folder_key] = {"indexed_files": 0, "total_chunks": 0, "total_size": 0}
                     folder_stats[folder_key]["indexed_files"] += 1
-                    folder_stats[folder_key]["total_chunks"] += chunk_count
+                    # abs() because negative chunk_count = in-progress indexing
+                    folder_stats[folder_key]["total_chunks"] += abs(chunk_count)
                     folder_stats[folder_key]["total_size"] += file_size
                     break
 
@@ -67,9 +68,10 @@ async def _gather_file_list_data(path: str, user, fs, db):
             )
         )
         for row in result.all():
+            raw_count = row[1]
             file_index_statuses[row[0]] = {
-                "status": "indexed",
-                "chunk_count": row[1],
+                "status": "indexing" if raw_count < 0 else "indexed",
+                "chunk_count": abs(raw_count),
                 "indexed_at": row[2].isoformat() if row[2] else None,
             }
 
