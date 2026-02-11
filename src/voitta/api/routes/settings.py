@@ -267,12 +267,6 @@ async def reindex_folder(
     index_status = result.scalar_one_or_none()
 
     if index_status:
-        if index_status.status == "indexing":
-            return ReindexResponse(
-                folder_path=path,
-                status=index_status.status,
-                message="Folder is already being indexed",
-            )
         index_status.status = "pending"
         index_status.error_message = None
     else:
