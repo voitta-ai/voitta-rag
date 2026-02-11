@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 # Context variable to store current user from X-User-Name header
 current_user: ContextVar[str | None] = ContextVar("current_user", default=None)
+# Context variable to store server host from X-Server-Host header
+server_host: ContextVar[str | None] = ContextVar("server_host", default=None)
 
 # Initialize MCP server
 mcp = FastMCP("voitta-rag")
@@ -40,6 +42,13 @@ class UserHeaderMiddleware(BaseHTTPMiddleware):
         else:
             print(f"🔑 MCP request (no user header) {request.method} {request.url.path}", flush=True)
             current_user.set(None)
+
+        host = request.headers.get("X-Server-Host")
+        if host:
+            server_host.set(host)
+        else:
+            server_host.set(None)
+
         response = await call_next(request)
         return response
 
@@ -558,15 +567,21 @@ def get_file_uri(file_path: str) -> FileUriResult:
         mime_type = "application/octet-stream"
 
     # Construct URI using main app host/port
-    # Use the main app port (not MCP port) since the raw endpoint is on the main app
-    host = settings.host
-    port = settings.port
+    # X-Server-Host can be a full base URL like "https://hostname.com"
+    base_url = server_host.get()
+    if base_url:
+        # Add default http:// if no protocol specified
+        if not base_url.startswith(("http://", "https://")):
+            base_url = f"http://{base_url}"
+        base_url = base_url.rstrip("/")
+    else:
+        host = settings.host
+        port = settings.port
+        if host == "0.0.0.0":
+            host = "localhost"
+        base_url = f"http://{host}:{port}"
 
-    # If host is 0.0.0.0, use localhost for the URI
-    if host == "0.0.0.0":
-        host = "localhost"
-
-    uri = f"http://{host}:{port}/api/raw/{clean_path}"
+    uri = f"{base_url}/api/raw/{clean_path}"
 
     return FileUriResult(
         uri=uri,
