@@ -1,6 +1,26 @@
 # voitta-rag
 
-Web-based file management system with RAG indexing and real-time monitoring.
+A self-hosted knowledge base that indexes your documents and code repositories, making them searchable through semantic (RAG) search. Connect it to AI coding assistants like Claude Code via MCP, or use the built-in web UI to browse and search across all your indexed content.
+
+Useful for teams and individuals who want to:
+- **Search across codebases and docs** — index Git repos, Google Drive folders, Jira boards, and office documents in one place
+- **Give AI assistants context** — expose your indexed knowledge to Claude Code or other MCP-compatible tools
+- **Keep everything local** — runs on your infrastructure with Qdrant for vector storage, no data leaves your network
+
+## Features
+
+- File browser with real-time updates
+- Folder creation and file upload
+- Git repository sync and indexing
+- Google Drive integration
+- Jira board sync
+- Per-user folder enable/disable for indexing
+- Automatic document indexing (DOCX, PPTX, XLSX, ODT, ODP, ODS)
+- Vector search with Qdrant
+- MCP server for Claude Code integration
+- File change detection via content hashing
+- Global file/folder metadata
+- Dark/light theme support
 
 ## Prerequisites
 
@@ -168,14 +188,3 @@ The config specifies per-host auth and folders with repo lists:
 
 Branch is auto-detected from the remote when not specified. The `import_repos.json` file is gitignored (may contain credentials).
 
-## Features
-
-- File browser with real-time updates
-- Folder creation and file upload
-- Per-user folder enable/disable for indexing
-- Automatic document indexing (DOCX, PPTX, XLSX, ODT, ODP, ODS)
-- Vector search with Qdrant
-- MCP server for Claude Code integration
-- File change detection via content hashing
-- Global file/folder metadata
-- Dark/light theme support
