@@ -208,6 +208,22 @@ class FilesystemService:
 
         return breadcrumbs
 
+    def is_dir_empty(self, relative_path: str) -> bool:
+        """Check if a directory has no (non-hidden) files recursively.
+
+        Stops at the first file found, unlike count_files_recursive.
+        """
+        dir_path = self._resolve_path(relative_path)
+        if not dir_path.exists() or not dir_path.is_dir():
+            return True
+        try:
+            for item in dir_path.rglob("*"):
+                if item.is_file() and not item.name.startswith("."):
+                    return False
+        except (PermissionError, OSError):
+            pass
+        return True
+
     def count_files_recursive(self, relative_path: str) -> int:
         """Count all files recursively within a folder."""
         dir_path = self._resolve_path(relative_path)

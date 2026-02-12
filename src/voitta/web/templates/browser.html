@@ -218,9 +218,15 @@
                     </div>
                     <div class="form-group-compact">
                         <label class="form-label-compact">Branch</label>
-                        <select id="gh-branch" class="sync-select">
-                            <option value="main">main</option>
-                        </select>
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <select id="gh-branch" class="sync-select" style="flex:1;">
+                                <option value="main">main</option>
+                            </select>
+                            <label style="display:flex; align-items:center; gap:4px; white-space:nowrap; font-size:12px; cursor:pointer;">
+                                <input type="checkbox" id="gh-all-branches" onchange="toggleAllBranches()">
+                                All branches
+                            </label>
+                        </div>
                     </div>
                     <div class="form-group-compact">
                         <label class="form-label-compact">Subfolder</label>

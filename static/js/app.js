@@ -998,7 +998,9 @@ function populateSyncFields(data) {
         document.getElementById('gh-ssh-key').value = data.github.ssh_key || '';
         document.getElementById('gh-username').value = data.github.username || '';
         document.getElementById('gh-pat').value = data.github.token || '';
+        document.getElementById('gh-all-branches').checked = !!data.github.all_branches;
         toggleGhAuth();
+        toggleAllBranches();
         // Fetch branches and pre-select the saved one
         const savedBranch = data.github.branch || 'main';
         if (data.github.repo) {
@@ -1164,6 +1166,7 @@ function gatherSyncConfig() {
             ssh_key: document.getElementById('gh-ssh-key').value.trim(),
             username: document.getElementById('gh-username').value.trim(),
             token: document.getElementById('gh-pat').value.trim(),
+            all_branches: document.getElementById('gh-all-branches').checked,
         };
     } else if (sourceType === 'azure_devops') {
         config.azure_devops = {
@@ -1305,6 +1308,11 @@ function toggleGhAuth() {
     document.getElementById('gh-token-fields').style.display = method === 'token' ? '' : 'none';
 }
 
+function toggleAllBranches() {
+    const checked = document.getElementById('gh-all-branches').checked;
+    document.getElementById('gh-branch').disabled = checked;
+}
+
 async function fetchGitBranches(preselectBranch) {
     const repoUrl = document.getElementById('gh-repo').value.trim();
     const authMethod = document.getElementById('gh-auth-method').value;
@@ -1367,7 +1375,7 @@ async function fetchGitBranches(preselectBranch) {
         branchSelect.innerHTML = '<option value="main">main</option>';
         console.warn('Failed to fetch branches:', e.message);
     } finally {
-        branchSelect.disabled = false;
+        branchSelect.disabled = document.getElementById('gh-all-branches').checked;
     }
 }
 

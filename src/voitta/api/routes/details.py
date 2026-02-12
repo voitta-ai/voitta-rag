@@ -1,5 +1,6 @@
 """Item details API for sidebar."""
 
+import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -61,7 +62,7 @@ async def get_item_details(
             detail=f"Path not found: {path}",
         )
 
-    info = fs.get_info(path)
+    info = fs.get_info(path, calculate_dir_size=False)
     is_dir = info.is_dir
 
     # Get metadata
@@ -110,7 +111,7 @@ async def get_item_details(
         sync_source_type = sync_source.source_type if sync_source else None
         sync_status = sync_source.sync_status if sync_source else None
         last_synced_at = sync_source.last_synced_at.isoformat() if sync_source and sync_source.last_synced_at else None
-        is_empty = fs.count_files_recursive(path) == 0
+        is_empty = fs.is_dir_empty(path)
     else:
         # Get file index info from indexed_files table
         result = await db.execute(
@@ -152,15 +153,19 @@ async def _get_file_type_stats(fs: Filesystem, db: DB, folder_path: str) -> list
     if not abs_folder_path.exists() or not abs_folder_path.is_dir():
         return []
 
-    # Count files by extension from filesystem
+    # Count files by extension using os.walk (avoids per-file stat calls
+    # that pathlib.rglob + is_file() would make)
     ext_counts: dict[str, int] = defaultdict(int)
+    abs_str = str(abs_folder_path)
 
-    for item in abs_folder_path.rglob("*"):
-        if item.is_file() and not item.name.startswith("."):
-            # Skip files in hidden directories (matches indexing.py logic)
-            if any(part.startswith(".") for part in item.relative_to(abs_folder_path).parts):
+    for dirpath, dirnames, filenames in os.walk(abs_str):
+        # Skip hidden directories in-place (prevents descent)
+        dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+        for fname in filenames:
+            if fname.startswith("."):
                 continue
-            ext = item.suffix.lower() if item.suffix else "(no extension)"
+            _dot = fname.rfind(".")
+            ext = fname[_dot:].lower() if _dot > 0 else "(no extension)"
             ext_counts[ext] += 1
 
     if not ext_counts:

@@ -40,23 +40,29 @@ async def _gather_file_list_data(path: str, user, fs, db):
 
         # Get folder stats from indexed_files
         current_prefix = (path + "/") if path else ""
+        prefix_len = len(current_prefix)
         result = await db.execute(
             select(IndexedFile.file_path, IndexedFile.chunk_count, IndexedFile.file_size).where(
                 IndexedFile.file_path.like(current_prefix + "%")
             )
         )
-        folder_paths_set = {fp + "/" for fp in folder_paths}
+        folder_paths_set = set(folder_paths)
         for file_path, chunk_count, file_size in result.all():
-            for fp_prefix in folder_paths_set:
-                if file_path.startswith(fp_prefix):
-                    folder_key = fp_prefix[:-1]
-                    if folder_key not in folder_stats:
-                        folder_stats[folder_key] = {"indexed_files": 0, "total_chunks": 0, "total_size": 0}
-                    folder_stats[folder_key]["indexed_files"] += 1
-                    # abs() because negative chunk_count = in-progress indexing
-                    folder_stats[folder_key]["total_chunks"] += abs(chunk_count)
-                    folder_stats[folder_key]["total_size"] += file_size
-                    break
+            # Extract immediate subfolder: "parent/subfolder/deep/file.txt"
+            # with prefix "parent/" → rest = "subfolder/deep/file.txt" → key = "parent/subfolder"
+            rest = file_path[prefix_len:]
+            slash_idx = rest.find("/")
+            if slash_idx < 0:
+                continue  # file directly in current dir, not in a subfolder
+            folder_key = current_prefix + rest[:slash_idx]
+            if folder_key not in folder_paths_set:
+                continue
+            if folder_key not in folder_stats:
+                folder_stats[folder_key] = {"indexed_files": 0, "total_chunks": 0, "total_size": 0}
+            folder_stats[folder_key]["indexed_files"] += 1
+            # abs() because negative chunk_count = in-progress indexing
+            folder_stats[folder_key]["total_chunks"] += abs(chunk_count)
+            folder_stats[folder_key]["total_size"] += file_size
 
     # Get index status for files
     file_paths = [item.path for item in items if not item.is_dir]

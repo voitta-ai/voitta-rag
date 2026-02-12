@@ -47,6 +47,7 @@ class GitHubConfig(BaseModel):
     ssh_key: str = ""  # Optional SSH private key
     username: str = ""  # For token auth (e.g. GitHub username or x-access-token)
     token: str = ""  # Personal access token (PAT)
+    all_branches: bool = False
 
 
 class AzureDevOpsConfig(BaseModel):
@@ -155,6 +156,7 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
             ssh_key=source.gh_token or "",
             username=source.gh_username or "",
             token=source.gh_pat or "",
+            all_branches=source.gh_all_branches or False,
         )
     elif source.source_type == "azure_devops":
         ado = AzureDevOpsConfig(
@@ -585,7 +587,7 @@ async def upsert_sync_source(
         "sp_tenant_id", "sp_client_id", "sp_client_secret", "sp_site_url", "sp_drive_id",
         "gd_service_account_json", "gd_folder_id", "gd_client_id", "gd_client_secret",
         "gh_token", "gh_repo", "gh_branch", "gh_path",
-        "gh_auth_method", "gh_username", "gh_pat",
+        "gh_auth_method", "gh_username", "gh_pat", "gh_all_branches",
         "ado_tenant_id", "ado_client_id", "ado_client_secret",
         "ado_organization", "ado_project", "ado_url",
         "jira_url", "jira_project", "jira_token",
@@ -619,6 +621,7 @@ async def upsert_sync_source(
         source.gh_token = request.github.ssh_key
         source.gh_username = request.github.username
         source.gh_pat = request.github.token
+        source.gh_all_branches = request.github.all_branches
     elif request.source_type == "azure_devops" and request.azure_devops:
         from ...services.sync.azure_devops import _parse_ado_url
         source.ado_tenant_id = request.azure_devops.tenant_id

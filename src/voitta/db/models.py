@@ -120,6 +120,7 @@ class FolderSyncSource(Base):
     gh_auth_method: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "ssh" or "token"
     gh_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     gh_pat: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gh_all_branches: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
 
     # Azure DevOps credentials
     ado_tenant_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
