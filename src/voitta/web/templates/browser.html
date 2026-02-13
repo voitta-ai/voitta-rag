@@ -183,6 +183,14 @@
 
                 <!-- Google Drive Fields -->
                 <div id="sync-fields-google_drive" class="sync-fields" style="display: none;">
+                    <div class="sync-fields-header">
+                        <button type="button" class="info-icon-btn" onclick="showGdCredentialsHelp()" title="How to get credentials">
+                            <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+                                <circle cx="10" cy="10" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                                <text x="10" y="14.5" text-anchor="middle" font-size="12" font-weight="600" fill="currentColor">i</text>
+                            </svg>
+                        </button>
+                    </div>
                     <div class="form-group-compact">
                         <label class="form-label-compact">Client ID</label>
                         <input type="text" id="gd-client-id" class="sync-input" placeholder="GCP OAuth client ID">
@@ -468,6 +476,36 @@
                 <button type="submit" class="btn btn-danger" id="btn-confirm-delete">Delete</button>
             </div>
         </form>
+    </div>
+</div>
+
+<!-- Google Drive Credentials Help Modal -->
+<div class="modal" id="gd-credentials-help-modal">
+    <div class="modal-backdrop" onclick="closeGdCredentialsHelp()"></div>
+    <div class="modal-content modal-content-wide">
+        <h2>Google Drive OAuth Credentials</h2>
+        <div class="help-steps">
+            <ol>
+                <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud Console &gt; APIs &amp; Credentials</a></li>
+                <li>Create a project (or select an existing one)</li>
+                <li>Click <strong>+ CREATE CREDENTIALS</strong> &gt; <strong>OAuth client ID</strong></li>
+                <li>If prompted, configure the OAuth consent screen:
+                    <ul>
+                        <li>User type: <strong>External</strong> (or Internal for Workspace)</li>
+                        <li>Add your email as a test user</li>
+                    </ul>
+                </li>
+                <li>Application type: <strong>Web application</strong></li>
+                <li>Under <strong>Authorized redirect URIs</strong>, add:<br>
+                    <code id="gd-help-redirect-uri"></code>
+                </li>
+                <li>Click <strong>Create</strong> and copy the Client ID and Client Secret into the fields here</li>
+            </ol>
+            <p class="help-note">You also need the <strong>Google Drive API</strong> enabled: go to <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noopener">APIs &amp; Services &gt; Library</a> and enable it.</p>
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeGdCredentialsHelp()">Close</button>
+        </div>
     </div>
 </div>
 
