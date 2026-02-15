@@ -173,6 +173,8 @@ class IndexedFile(Base):
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)  # SHA-256
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
+    source_created_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    source_modified_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now

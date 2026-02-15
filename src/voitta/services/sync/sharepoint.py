@@ -247,6 +247,7 @@ class SharePointConnector(BaseSyncConnector):
                             content_hash=item.get("file", {})
                             .get("hashes", {})
                             .get("sha256Hash"),
+                            created_at=item.get("createdDateTime", ""),
                         )
                     )
 

@@ -193,7 +193,7 @@ class ConfluenceConnector(BaseSyncConnector):
                     "type": "page",
                     "start": start,
                     "limit": limit,
-                    "expand": "ancestors,version",
+                    "expand": "ancestors,version,history",
                 },
                 headers=headers,
             )
@@ -263,12 +263,15 @@ class ConfluenceConnector(BaseSyncConnector):
                 # Use version number as content hash for change detection
                 content_hash = hashlib.sha256(f"{version}:{updated}".encode()).hexdigest()
 
+                created_date = page.get("history", {}).get("createdDate", "")
+
                 files.append(
                     RemoteFile(
                         remote_path=remote_path,
                         size=0,
                         modified_at=updated,
                         content_hash=content_hash,
+                        created_at=created_date,
                     )
                 )
 
@@ -392,6 +395,18 @@ class ConfluenceConnector(BaseSyncConnector):
                     dirpath.rmdir()
                 except Exception:
                     pass
+
+        # Write timestamps sidecar for the indexing pipeline
+        timestamps = {}
+        for rf in remote_files:
+            entry = {}
+            if rf.modified_at:
+                entry["modified_at"] = rf.modified_at
+            if rf.created_at:
+                entry["created_at"] = rf.created_at
+            if entry:
+                timestamps[rf.remote_path] = entry
+        (local_root / ".voitta_timestamps.json").write_text(json.dumps(timestamps))
 
         hash_file.write_text(json.dumps(new_revisions), encoding="utf-8")
         logger.info("Sync complete for %s: %s", folder_path, stats)

@@ -1,6 +1,7 @@
 """Base class for remote sync connectors."""
 
 import hashlib
+import json
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ class RemoteFile:
     size: int
     modified_at: str  # ISO 8601
     content_hash: str | None = None
+    created_at: str = ""  # ISO 8601
 
 
 class BaseSyncConnector(ABC):
@@ -96,6 +98,18 @@ class BaseSyncConnector(ABC):
                     dirpath.rmdir()
                 except Exception:
                     pass
+
+        # Write timestamps sidecar for the indexing pipeline
+        timestamps = {}
+        for rf in remote_files:
+            entry = {}
+            if rf.modified_at:
+                entry["modified_at"] = rf.modified_at
+            if rf.created_at:
+                entry["created_at"] = rf.created_at
+            if entry:
+                timestamps[rf.remote_path] = entry
+        (local_root / ".voitta_timestamps.json").write_text(json.dumps(timestamps))
 
         logger.info("Sync complete for %s: %s", folder_path, stats)
         return stats

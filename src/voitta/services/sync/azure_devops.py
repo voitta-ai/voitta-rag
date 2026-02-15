@@ -329,12 +329,15 @@ class AzureDevOpsConnector(BaseSyncConnector):
 
                 content_hash = hashlib.sha256(f"{rev}:{changed_date}".encode()).hexdigest()
 
+                created_date = fields.get("System.CreatedDate", "")
+
                 files.append(
                     RemoteFile(
                         remote_path=remote_path,
                         size=0,
                         modified_at=changed_date,
                         content_hash=content_hash,
+                        created_at=created_date,
                     )
                 )
 
@@ -535,6 +538,18 @@ class AzureDevOpsConnector(BaseSyncConnector):
                     dirpath.rmdir()
                 except Exception:
                     pass
+
+        # Write timestamps sidecar for the indexing pipeline
+        timestamps = {}
+        for rf in remote_files:
+            entry = {}
+            if rf.modified_at:
+                entry["modified_at"] = rf.modified_at
+            if rf.created_at:
+                entry["created_at"] = rf.created_at
+            if entry:
+                timestamps[rf.remote_path] = entry
+        (local_root / ".voitta_timestamps.json").write_text(json.dumps(timestamps))
 
         hash_file.write_text(json.dumps(new_revisions), encoding="utf-8")
         logger.info("Sync complete for %s: %s", folder_path, stats)

@@ -686,6 +686,7 @@ class GitHubConnector(BaseSyncConnector):
 
         new_revisions: dict[str, str] = {}
         remote_paths: set[str] = set()
+        timestamps: dict[str, dict] = {}
         stats = {"downloaded": 0, "deleted": 0, "skipped": 0, "errors": 0}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -694,6 +695,7 @@ class GitHubConnector(BaseSyncConnector):
                 await self._sync_gh_issues(
                     client, api_base, token, local_root,
                     old_revisions, new_revisions, remote_paths, stats,
+                    timestamps,
                 )
             except Exception as e:
                 logger.error("Failed to sync GitHub issues: %s", e)
@@ -704,6 +706,7 @@ class GitHubConnector(BaseSyncConnector):
                 await self._sync_gh_pull_requests(
                     client, api_base, token, local_root,
                     old_revisions, new_revisions, remote_paths, stats,
+                    timestamps,
                 )
             except Exception as e:
                 logger.error("Failed to sync GitHub PRs: %s", e)
@@ -714,6 +717,7 @@ class GitHubConnector(BaseSyncConnector):
                 await self._sync_gh_actions(
                     client, api_base, token, local_root,
                     old_revisions, new_revisions, remote_paths, stats,
+                    timestamps,
                 )
             except Exception as e:
                 logger.error("Failed to sync GitHub actions: %s", e)
@@ -741,6 +745,9 @@ class GitHubConnector(BaseSyncConnector):
                     except Exception:
                         pass
 
+        # Write timestamps sidecar for the indexing pipeline
+        (local_root / ".voitta_timestamps.json").write_text(json.dumps(timestamps))
+
         revisions_file.write_text(json.dumps(new_revisions), encoding="utf-8")
         logger.info("GitHub metadata sync: %s", stats)
         return stats
@@ -748,6 +755,7 @@ class GitHubConnector(BaseSyncConnector):
     async def _sync_gh_issues(
         self, client, api_base, token, local_root,
         old_revisions, new_revisions, remote_paths, stats,
+        timestamps,
     ):
         """Fetch and render GitHub issues as markdown files."""
         issues = await self._gh_api_get_pages(
@@ -762,9 +770,19 @@ class GitHubConnector(BaseSyncConnector):
             number = issue["number"]
             title = issue.get("title", f"Issue-{number}")
             updated = issue.get("updated_at", "")
+            created = issue.get("created_at", "")
             safe_title = _sanitize_gh_filename(title)
             rel_path = f"issues/{number}-{safe_title}.md"
             remote_paths.add(rel_path)
+
+            # Collect timestamps for sidecar
+            ts_entry = {}
+            if updated:
+                ts_entry["modified_at"] = updated
+            if created:
+                ts_entry["created_at"] = created
+            if ts_entry:
+                timestamps[rel_path] = ts_entry
 
             content_hash = hashlib.sha256(updated.encode()).hexdigest()
             new_revisions[rel_path] = content_hash
@@ -795,6 +813,7 @@ class GitHubConnector(BaseSyncConnector):
     async def _sync_gh_pull_requests(
         self, client, api_base, token, local_root,
         old_revisions, new_revisions, remote_paths, stats,
+        timestamps,
     ):
         """Fetch and render GitHub pull requests as markdown files."""
         prs = await self._gh_api_get_pages(
@@ -807,9 +826,19 @@ class GitHubConnector(BaseSyncConnector):
             number = pr["number"]
             title = pr.get("title", f"PR-{number}")
             updated = pr.get("updated_at", "")
+            created = pr.get("created_at", "")
             safe_title = _sanitize_gh_filename(title)
             rel_path = f"pull-requests/{number}-{safe_title}.md"
             remote_paths.add(rel_path)
+
+            # Collect timestamps for sidecar
+            ts_entry = {}
+            if updated:
+                ts_entry["modified_at"] = updated
+            if created:
+                ts_entry["created_at"] = created
+            if ts_entry:
+                timestamps[rel_path] = ts_entry
 
             content_hash = hashlib.sha256(updated.encode()).hexdigest()
             new_revisions[rel_path] = content_hash
@@ -846,6 +875,7 @@ class GitHubConnector(BaseSyncConnector):
     async def _sync_gh_actions(
         self, client, api_base, token, local_root,
         old_revisions, new_revisions, remote_paths, stats,
+        timestamps,
     ):
         """Fetch and render recent GitHub Actions workflow runs."""
         runs_data = await self._gh_api_get(
@@ -861,9 +891,19 @@ class GitHubConnector(BaseSyncConnector):
             run_number = run.get("run_number", 0)
             workflow_name = run.get("name", "workflow")
             updated = run.get("updated_at", "")
+            created = run.get("created_at", "")
             safe_workflow = _sanitize_gh_filename(workflow_name)
             rel_path = f"actions/{safe_workflow}/{run_number}.md"
             remote_paths.add(rel_path)
+
+            # Collect timestamps for sidecar
+            ts_entry = {}
+            if updated:
+                ts_entry["modified_at"] = updated
+            if created:
+                ts_entry["created_at"] = created
+            if ts_entry:
+                timestamps[rel_path] = ts_entry
 
             content_hash = hashlib.sha256(updated.encode()).hexdigest()
             new_revisions[rel_path] = content_hash

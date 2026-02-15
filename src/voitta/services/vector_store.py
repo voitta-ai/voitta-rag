@@ -32,6 +32,9 @@ class ChunkMetadata:
     start_page: int | None = None  # First page this chunk came from
     end_page: int | None = None  # Last page this chunk came from
     source_page_count: int | None = None  # Total pages in source PDF
+    # Source timestamps (Unix epoch integers)
+    source_created_at: int | None = None
+    source_modified_at: int | None = None
 
 
 @dataclass
@@ -73,6 +76,8 @@ class VectorStoreService:
             # Check if sparse vectors are configured
             sparse = info.config.params.sparse_vectors or {}
             self._has_sparse = SPARSE_VECTOR_NAME in sparse
+            # Ensure timestamp indexes exist on existing collections
+            self._ensure_timestamp_indexes()
         except (UnexpectedResponse, Exception):
             logger.info(f"Creating collection '{self.collection_name}'")
             self._client.create_collection(
@@ -94,8 +99,30 @@ class VectorStoreService:
                     field_name=field,
                     field_schema=qmodels.PayloadSchemaType.KEYWORD,
                 )
+            for field in ("source_created_at", "source_modified_at"):
+                self._client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name=field,
+                    field_schema=qmodels.PayloadSchemaType.INTEGER,
+                )
             self._has_sparse = True
             logger.info(f"Collection '{self.collection_name}' created")
+
+    def _ensure_timestamp_indexes(self) -> None:
+        """Create INTEGER payload indexes for timestamp fields if missing."""
+        try:
+            info = self._client.get_collection(self.collection_name)
+            existing = set(info.payload_schema.keys()) if info.payload_schema else set()
+            for field in ("source_created_at", "source_modified_at"):
+                if field not in existing:
+                    self._client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name=field,
+                        field_schema=qmodels.PayloadSchemaType.INTEGER,
+                    )
+                    logger.info(f"Created index for '{field}' on '{self.collection_name}'")
+        except Exception as e:
+            logger.warning(f"Failed to ensure timestamp indexes: {e}")
 
     def store_chunks(
         self,
@@ -142,6 +169,11 @@ class VectorStoreService:
                 payload["end_page"] = metadata.end_page
             if metadata.source_page_count is not None:
                 payload["source_page_count"] = metadata.source_page_count
+            # Add source timestamps if present
+            if metadata.source_created_at is not None:
+                payload["source_created_at"] = metadata.source_created_at
+            if metadata.source_modified_at is not None:
+                payload["source_modified_at"] = metadata.source_modified_at
 
             # Build vector: unnamed dense + optional sparse
             if sparse_vectors and idx < len(sparse_vectors):
@@ -361,6 +393,8 @@ class VectorStoreService:
                 start_page=payload.get("start_page"),
                 end_page=payload.get("end_page"),
                 source_page_count=payload.get("source_page_count"),
+                source_created_at=payload.get("source_created_at"),
+                source_modified_at=payload.get("source_modified_at"),
             ),
             score=result.score,
         )
@@ -757,6 +791,8 @@ class VectorStoreService:
                                     start_page=payload.get("start_page"),
                                     end_page=payload.get("end_page"),
                                     source_page_count=payload.get("source_page_count"),
+                                    source_created_at=payload.get("source_created_at"),
+                                    source_modified_at=payload.get("source_modified_at"),
                                 ),
                                 score=None,
                             )
