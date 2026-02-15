@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from .azw3_parser import Azw3Parser
 from .base import BaseParser, ParserResult
 from .docx_parser import DocxParser
 from .epub_parser import EpubParser
@@ -68,6 +69,7 @@ def get_registry() -> ParserRegistry:
     if _default_registry is None:
         _default_registry = ParserRegistry()
         # Register all parsers
+        _default_registry.register(Azw3Parser())
         _default_registry.register(DocxParser())
         _default_registry.register(EpubParser())
         _default_registry.register(PdfParser())

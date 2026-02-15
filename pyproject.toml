@@ -19,6 +19,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "websockets>=12.0",
     # Document parsers
+    "mobi>=0.3.0",
+    "html2text>=2024.2.0",
     "python-docx>=1.1.0",
     "python-pptx>=0.6.23",
     "openpyxl>=3.1.0",
