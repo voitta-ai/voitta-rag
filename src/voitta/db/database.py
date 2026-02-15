@@ -4,7 +4,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from functools import lru_cache
 
-from sqlalchemy import create_engine, Engine
+from sqlalchemy import create_engine, event, Engine, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     AsyncEngine,
@@ -17,28 +17,40 @@ from ..config import get_settings
 from .models import Base, User
 
 
+def _set_sqlite_pragmas(dbapi_conn, connection_record):
+    """Set SQLite pragmas on every new connection."""
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
+
+
 @lru_cache
 def get_async_engine() -> AsyncEngine:
     """Get or create the async database engine."""
     settings = get_settings()
-    return create_async_engine(
+    engine = create_async_engine(
         settings.database_url,
         echo=False,
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 30},
         poolclass=StaticPool,
     )
+    event.listens_for(engine.sync_engine, "connect")(_set_sqlite_pragmas)
+    return engine
 
 
 @lru_cache
 def get_sync_engine() -> Engine:
     """Get or create the sync database engine."""
     settings = get_settings()
-    return create_engine(
+    engine = create_engine(
         settings.sync_database_url,
         echo=False,
-        connect_args={"check_same_thread": False},
+        connect_args={"check_same_thread": False, "timeout": 30},
         poolclass=StaticPool,
     )
+    event.listens_for(engine, "connect")(_set_sqlite_pragmas)
+    return engine
 
 
 @lru_cache
@@ -99,12 +111,6 @@ def init_db() -> None:
     from sqlalchemy.orm import Session
 
     sync_engine = get_sync_engine()
-
-    # Enable WAL mode for concurrent access
-    from sqlalchemy import text
-    with sync_engine.connect() as conn:
-        conn.execute(text("PRAGMA journal_mode=WAL"))
-        conn.commit()
 
     # Create all tables
     Base.metadata.create_all(bind=sync_engine)

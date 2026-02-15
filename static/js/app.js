@@ -1625,6 +1625,17 @@ function updateGdConnectStatus(connected) {
     }
 }
 
+function showGdCredentialsHelp() {
+    const modal = document.getElementById('gd-credentials-help-modal');
+    const uriEl = document.getElementById('gd-help-redirect-uri');
+    uriEl.textContent = window.location.origin + '/api/sync/oauth/callback';
+    modal.classList.add('active');
+}
+
+function closeGdCredentialsHelp() {
+    document.getElementById('gd-credentials-help-modal').classList.remove('active');
+}
+
 async function connectGoogleDrive() {
     const targetPath = selectedPath || currentPath;
     if (!targetPath) {

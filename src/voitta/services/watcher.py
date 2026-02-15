@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -90,6 +91,8 @@ class FileWatcherHandler(FileSystemEventHandler):
 class FileWatcher:
     """Filesystem watcher that pushes events to connected clients."""
 
+    _DIR_DEBOUNCE_SECS = 0.5
+
     def __init__(self):
         self.settings = get_settings()
         self.root = self.settings.root_path
@@ -97,6 +100,9 @@ class FileWatcher:
         self._subscribers: set[asyncio.Queue] = set()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._suppressed_paths: set[str] = set()  # Paths being bulk-deleted via API
+        self._pending_dirs: set[str] = set()
+        self._pending_dirs_lock = threading.Lock()
+        self._dir_timer: threading.Timer | None = None
 
     def suppress_path(self, path: str) -> None:
         """Suppress watcher-side deletion handling for a path (bulk delete in progress)."""
@@ -126,7 +132,7 @@ class FileWatcher:
         if event.event_type == EventType.DELETED:
             self._handle_deletion(event)
         elif event.event_type == EventType.CREATED and event.is_dir:
-            self._handle_dir_creation(event)
+            self._queue_dir_creation(event.path)
 
         # Schedule the async notification in the event loop
         asyncio.run_coroutine_threadsafe(self._notify_subscribers(event), self._loop)
@@ -155,8 +161,28 @@ class FileWatcher:
         except Exception as e:
             logger.error(f"Error handling deletion for {event.path}: {e}")
 
-    def _handle_dir_creation(self, event: FileEvent) -> None:
-        """Inherit parent folder settings for newly created directories."""
+    def _queue_dir_creation(self, path: str) -> None:
+        """Queue a directory creation for batched settings inheritance."""
+        with self._pending_dirs_lock:
+            self._pending_dirs.add(path)
+            if self._dir_timer is not None:
+                self._dir_timer.cancel()
+            self._dir_timer = threading.Timer(
+                self._DIR_DEBOUNCE_SECS, self._flush_pending_dirs
+            )
+            self._dir_timer.daemon = True
+            self._dir_timer.start()
+
+    def _flush_pending_dirs(self) -> None:
+        """Process all pending directory creations in a single DB transaction."""
+        with self._pending_dirs_lock:
+            dirs = list(self._pending_dirs)
+            self._pending_dirs.clear()
+            self._dir_timer = None
+
+        if not dirs:
+            return
+
         from sqlalchemy import select
 
         from ..db.models import UserFolderSetting
@@ -164,55 +190,54 @@ class FileWatcher:
         try:
             engine = get_sync_engine()
             with Session(engine) as db:
-                # Build ancestor paths from closest to farthest
-                parts = Path(event.path).parts
-                ancestor_paths: list[str] = []
-                for i in range(len(parts) - 1, 0, -1):
-                    ancestor_paths.append(str(Path(*parts[:i])))
-                ancestor_paths.append("")  # root
+                created_count = 0
+                for dir_path in dirs:
+                    parts = Path(dir_path).parts
+                    ancestor_paths: list[str] = []
+                    for i in range(len(parts) - 1, 0, -1):
+                        ancestor_paths.append(str(Path(*parts[:i])))
+                    ancestor_paths.append("")  # root
 
-                for ancestor in ancestor_paths:
-                    result = db.execute(
-                        select(UserFolderSetting).where(
-                            UserFolderSetting.folder_path == ancestor,
-                        )
-                    )
-                    parent_settings = result.scalars().all()
-
-                    if not parent_settings:
-                        continue
-
-                    # Check which users already have settings for this new path
-                    existing = db.execute(
-                        select(UserFolderSetting.user_id).where(
-                            UserFolderSetting.folder_path == event.path,
-                        )
-                    )
-                    existing_user_ids = {row[0] for row in existing.fetchall()}
-
-                    created = False
-                    for ps in parent_settings:
-                        if ps.user_id in existing_user_ids:
-                            continue
-                        if ps.search_active or ps.enabled:
-                            db.add(
-                                UserFolderSetting(
-                                    user_id=ps.user_id,
-                                    folder_path=event.path,
-                                    enabled=ps.enabled,
-                                    search_active=ps.search_active,
-                                )
+                    for ancestor in ancestor_paths:
+                        result = db.execute(
+                            select(UserFolderSetting).where(
+                                UserFolderSetting.folder_path == ancestor,
                             )
-                            created = True
-
-                    if created:
-                        db.commit()
-                        logger.info(
-                            f"Inherited folder settings for new directory: {event.path}"
                         )
-                    break  # Only inherit from closest ancestor with settings
+                        parent_settings = result.scalars().all()
+
+                        if not parent_settings:
+                            continue
+
+                        existing = db.execute(
+                            select(UserFolderSetting.user_id).where(
+                                UserFolderSetting.folder_path == dir_path,
+                            )
+                        )
+                        existing_user_ids = {row[0] for row in existing.fetchall()}
+
+                        for ps in parent_settings:
+                            if ps.user_id in existing_user_ids:
+                                continue
+                            if ps.search_active or ps.enabled:
+                                db.add(
+                                    UserFolderSetting(
+                                        user_id=ps.user_id,
+                                        folder_path=dir_path,
+                                        enabled=ps.enabled,
+                                        search_active=ps.search_active,
+                                    )
+                                )
+                                created_count += 1
+                        break  # Only inherit from closest ancestor with settings
+
+                if created_count > 0:
+                    db.commit()
+                    logger.info(
+                        f"Inherited folder settings for {created_count} new directories"
+                    )
         except Exception as e:
-            logger.error(f"Error inheriting folder settings for {event.path}: {e}")
+            logger.error(f"Error inheriting folder settings for batch: {e}")
 
     async def _notify_subscribers(self, event: FileEvent):
         """Notify all subscribers of an event."""
@@ -271,6 +296,9 @@ class FileWatcher:
 
     def stop(self):
         """Stop watching the filesystem."""
+        if self._dir_timer is not None:
+            self._dir_timer.cancel()
+            self._flush_pending_dirs()
         if self.observer is not None:
             self.observer.stop()
             self.observer.join(timeout=5)

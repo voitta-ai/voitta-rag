@@ -76,6 +76,31 @@ By default, `~/.ssh` is mounted read-only into the container for SSH-based git a
 SSH_KEY_DIR=/path/to/ssh/keys docker compose up -d --build
 ```
 
+#### Mounting local directories
+
+To index a local directory (e.g., Google Drive for Desktop) without using a remote sync connector, create a `docker-compose.override.yml` (gitignored, merged automatically by Docker Compose):
+
+```yaml
+services:
+  voitta-rag:
+    volumes:
+      - ~/Google Drive:/data/fs/gdrive:ro
+```
+
+The directory appears as a folder named `gdrive` in the UI. Enable indexing on it like any other folder. The file watcher detects changes automatically.
+
+You can mount multiple directories:
+
+```yaml
+services:
+  voitta-rag:
+    volumes:
+      - ~/Google Drive:/data/fs/gdrive:ro
+      - ~/Dropbox/Projects:/data/fs/dropbox-projects:ro
+```
+
+Note: symlinks inside mounted volumes won't work -- Docker doesn't resolve symlink targets across mount boundaries. Use volume mounts instead.
+
 ### Option B: Local development
 
 ```bash
