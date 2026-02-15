@@ -244,7 +244,7 @@ class GoogleDriveConnector(BaseSyncConnector):
                 service.files()
                 .list(
                     q=f"'{folder_id}' in parents and trashed = false",
-                    fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, md5Checksum)",
+                    fields="nextPageToken, files(id, name, mimeType, size, modifiedTime, createdTime, md5Checksum)",
                     pageSize=1000,
                     pageToken=page_token,
                     supportsAllDrives=True,
@@ -266,6 +266,7 @@ class GoogleDriveConnector(BaseSyncConnector):
                             size=0,  # native Google files have no size
                             modified_at=item.get("modifiedTime", ""),
                             content_hash=None,
+                            created_at=item.get("createdTime", ""),
                         )
                     )
                 elif mime.startswith("application/vnd.google-apps."):
@@ -278,6 +279,7 @@ class GoogleDriveConnector(BaseSyncConnector):
                             size=int(item.get("size", 0)),
                             modified_at=item.get("modifiedTime", ""),
                             content_hash=item.get("md5Checksum"),
+                            created_at=item.get("createdTime", ""),
                         )
                     )
 

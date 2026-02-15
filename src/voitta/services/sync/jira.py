@@ -559,7 +559,7 @@ class JiraConnector(BaseSyncConnector):
                         "jql": jql,
                         "startAt": start_at,
                         "maxResults": max_results,
-                        "fields": "key,issuetype,summary,updated",
+                        "fields": "key,issuetype,summary,updated,created",
                     },
                     headers=headers,
                 )
@@ -589,12 +589,15 @@ class JiraConnector(BaseSyncConnector):
                     # Use updated timestamp as content hash for change detection
                     content_hash = hashlib.sha256(updated.encode()).hexdigest()
 
+                    created = flds.get("created", "")
+
                     files.append(
                         RemoteFile(
                             remote_path=remote_path,
                             size=0,
                             modified_at=updated,
                             content_hash=content_hash,
+                            created_at=created,
                         )
                     )
 
@@ -721,6 +724,18 @@ class JiraConnector(BaseSyncConnector):
                     dirpath.rmdir()
                 except Exception:
                     pass
+
+        # Write timestamps sidecar for the indexing pipeline
+        timestamps = {}
+        for rf in remote_files:
+            entry = {}
+            if rf.modified_at:
+                entry["modified_at"] = rf.modified_at
+            if rf.created_at:
+                entry["created_at"] = rf.created_at
+            if entry:
+                timestamps[rf.remote_path] = entry
+        (local_root / ".voitta_timestamps.json").write_text(json.dumps(timestamps))
 
         hash_file.write_text(json.dumps(new_revisions), encoding="utf-8")
         logger.info("Sync complete for %s: %s", folder_path, stats)

@@ -1,6 +1,7 @@
 """Indexing service for processing and storing document embeddings."""
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -45,6 +46,66 @@ def compute_file_hash(file_path: Path) -> str:
         for chunk in iter(lambda: f.read(8192), b""):
             sha256.update(chunk)
     return sha256.hexdigest()
+
+
+def _iso_to_epoch(iso_str: str) -> int | None:
+    """Parse an ISO 8601 string to Unix epoch (seconds). Returns None on failure."""
+    if not iso_str:
+        return None
+    try:
+        # Handle various ISO formats (with/without timezone, fractional seconds)
+        s = iso_str.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        return int(dt.timestamp())
+    except (ValueError, OSError):
+        return None
+
+
+def _load_source_timestamps(
+    file_path: str, abs_path: Path
+) -> tuple[int | None, int | None]:
+    """Load source timestamps for a file.
+
+    Walks up directories to find .voitta_timestamps.json sidecar.
+    Falls back to filesystem stat() for local (non-synced) files.
+
+    Returns:
+        (source_created_at, source_modified_at) as Unix epoch integers
+    """
+    # Walk up from the file's directory looking for the sidecar
+    current = abs_path.parent
+    while True:
+        sidecar = current / ".voitta_timestamps.json"
+        if sidecar.exists():
+            try:
+                data = json.loads(sidecar.read_text())
+                # file_path is relative to root_path; we need the relative path
+                # from the sidecar's directory
+                # The sidecar uses remote_path keys which match the relative path
+                # from the sync root (where the sidecar lives)
+                rel_from_sidecar = str(abs_path.relative_to(current))
+                entry = data.get(rel_from_sidecar, {})
+                if entry:
+                    created = _iso_to_epoch(entry.get("created_at", ""))
+                    modified = _iso_to_epoch(entry.get("modified_at", ""))
+                    return created, modified
+            except Exception:
+                pass
+            break  # Found sidecar but no entry; don't walk further up
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    # Fallback: filesystem stat()
+    try:
+        st = abs_path.stat()
+        modified = int(st.st_mtime)
+        # st_birthtime on macOS, st_ctime on Linux (inode change time)
+        created = int(getattr(st, "st_birthtime", st.st_ctime))
+        return created, modified
+    except OSError:
+        return None, None
 
 
 class IndexingService:
@@ -188,6 +249,9 @@ class IndexingService:
         """Index a PDF using bucketed processing - parse and store incrementally."""
         idx_logger.info(f"[INDEX] Using BUCKETED PDF processing for: {file_path}")
 
+        # Load source timestamps
+        source_created_at, source_modified_at = _load_source_timestamps(file_path, abs_path)
+
         parser = PdfParser()
         file_name = abs_path.name
         indexed_at = datetime.now(timezone.utc).isoformat()
@@ -202,6 +266,8 @@ class IndexingService:
                 existing.file_size = file_size
                 existing.chunk_count = -1  # Negative = in progress
                 existing.index_folder = index_folder
+                existing.source_created_at = source_created_at
+                existing.source_modified_at = source_modified_at
                 existing.updated_at = datetime.now(timezone.utc)
                 db_record = existing
             else:
@@ -212,6 +278,8 @@ class IndexingService:
                     content_hash=file_hash,
                     file_size=file_size,
                     chunk_count=-1,  # Negative = in progress
+                    source_created_at=source_created_at,
+                    source_modified_at=source_modified_at,
                 )
                 db.add(db_record)
             db.commit()
@@ -281,6 +349,8 @@ class IndexingService:
                         start_page=start_page,
                         end_page=end_page,
                         source_page_count=source_page_count,
+                        source_created_at=source_created_at,
+                        source_modified_at=source_modified_at,
                     )
                     chunk_data.append((chunk.text, embedding, metadata))
 
@@ -344,6 +414,9 @@ class IndexingService:
         """Standard indexing for non-PDF files."""
         idx_logger.info(f"[INDEX] Using STANDARD processing for: {file_path}")
 
+        # Load source timestamps
+        source_created_at, source_modified_at = _load_source_timestamps(file_path, abs_path)
+
         # Parse the file
         try:
             parse_result = parse_file(abs_path)
@@ -399,6 +472,8 @@ class IndexingService:
                 start_char=chunk.start_char,
                 end_char=chunk.end_char,
                 indexed_at=indexed_at,
+                source_created_at=source_created_at,
+                source_modified_at=source_modified_at,
             )
             chunk_data.append((chunk.text, embedding, metadata))
 
@@ -416,6 +491,8 @@ class IndexingService:
                 existing.file_size = file_size
                 existing.chunk_count = len(chunks)
                 existing.index_folder = index_folder
+                existing.source_created_at = source_created_at
+                existing.source_modified_at = source_modified_at
                 existing.updated_at = datetime.now(timezone.utc)
             else:
                 indexed_file = IndexedFile(
@@ -425,6 +502,8 @@ class IndexingService:
                     content_hash=file_hash,
                     file_size=file_size,
                     chunk_count=len(chunks),
+                    source_created_at=source_created_at,
+                    source_modified_at=source_modified_at,
                 )
                 db.add(indexed_file)
 

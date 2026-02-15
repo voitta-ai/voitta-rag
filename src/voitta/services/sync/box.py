@@ -160,7 +160,7 @@ class BoxConnector(BaseSyncConnector):
             resp = await client.get(
                 f"{BOX_API_BASE}/folders/{folder_id}/items",
                 params={
-                    "fields": "name,size,modified_at,sha1,type",
+                    "fields": "name,size,modified_at,created_at,sha1,type",
                     "limit": limit,
                     "offset": offset,
                 },
@@ -198,6 +198,7 @@ class BoxConnector(BaseSyncConnector):
                             size=entry.get("size", 0),
                             modified_at=entry.get("modified_at", ""),
                             content_hash=entry.get("sha1"),
+                            created_at=entry.get("created_at", ""),
                         )
                     )
 
