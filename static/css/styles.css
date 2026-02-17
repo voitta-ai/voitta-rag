@@ -398,6 +398,92 @@ a:hover {
     color: var(--color-text-tertiary);
 }
 
+/* Project Selector */
+.project-selector {
+    flex-shrink: 0;
+}
+
+.project-select {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    padding-right: 28px;
+    font-family: inherit;
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-primary);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    transition: border-color var(--transition-fast);
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2386868b' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+}
+
+.project-select:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
+/* Project Modal */
+.project-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+    margin-bottom: var(--spacing-md);
+    max-height: 240px;
+    overflow-y: auto;
+}
+
+.project-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--color-bg);
+    border-radius: var(--radius-md);
+}
+
+.project-item-name {
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+}
+
+.project-default-badge {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+    font-weight: var(--font-weight-regular);
+}
+
+.project-delete-btn {
+    color: var(--color-error) !important;
+    padding: var(--spacing-xs) !important;
+}
+
+.project-create-form {
+    display: flex;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-lg);
+}
+
+.project-create-form input {
+    flex: 1;
+    padding: var(--spacing-sm) var(--spacing-md);
+    font-family: inherit;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+}
+
+.project-create-form input:focus {
+    outline: none;
+    border-color: var(--color-accent);
+}
+
 .toolbar-actions {
     display: flex;
     gap: var(--spacing-sm);
@@ -446,6 +532,25 @@ a:hover {
     text-align: center;
 }
 
+.sortable-header {
+    cursor: pointer;
+    user-select: none;
+    transition: color var(--transition-fast);
+}
+
+.sortable-header:hover {
+    color: var(--color-text-primary);
+}
+
+.sortable-header.active {
+    color: var(--color-text-primary);
+}
+
+.sort-arrow {
+    font-size: 9px;
+    opacity: 0.6;
+}
+
 .file-list {
     min-height: 400px;
 }
@@ -455,7 +560,7 @@ a:hover {
     grid-template-columns: 1fr 40px 60px 80px 120px;
     align-items: center;
     gap: var(--spacing-md);
-    padding: var(--spacing-md);
+    padding: var(--spacing-xs) var(--spacing-md);
     border-bottom: 1px solid var(--color-border-light);
     cursor: pointer;
     transition: background-color var(--transition-fast);

@@ -10,6 +10,9 @@
      data-path="{{ item.path }}"
      data-index-status="{{ item_index_status }}"
      data-search-active="{{ 'true' if item_search_active else 'false' }}"
+     data-name="{{ item.name|lower }}"
+     data-is-dir="{{ '1' if item.is_dir else '0' }}"
+     data-size="{{ stats.get('total_size', 0) if item.is_dir and stats else (item.size if not item.is_dir else 0) }}"
      onclick="selectItem(this, '{{ item.path }}', {{ 'true' if item.is_dir else 'false' }})">
     <div class="col-name">
         {% if item.is_dir %}

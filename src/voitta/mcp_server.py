@@ -14,7 +14,7 @@ from starlette.requests import Request
 
 from .config import get_settings
 from .db.database import get_sync_engine
-from .db.models import FileMetadata, FolderIndexStatus, IndexedFile, User, UserFolderSetting
+from .db.models import FileMetadata, FolderIndexStatus, IndexedFile, Project, ProjectFolderSetting, User, UserFolderSetting
 from .services.embedding import get_embedding_service
 from .services.parsers import parse_file
 from .services.sparse_embedding import get_sparse_embedding_service
@@ -72,14 +72,48 @@ def _get_or_create_user(db: Session, user_name: str) -> User:
     return user
 
 
-def _get_user_active_folders(db: Session, user_id: int) -> list[str]:
-    """Get list of folder paths that are active for search for the user."""
-    result = db.execute(
-        select(UserFolderSetting.folder_path).where(
-            UserFolderSetting.user_id == user_id,
-            UserFolderSetting.search_active == True,  # noqa: E712
+def _get_active_project(db: Session, user: User) -> Project:
+    """Get the user's active project, creating a default project if needed."""
+    if user.active_project_id:
+        result = db.execute(
+            select(Project).where(Project.id == user.active_project_id)
         )
+        project = result.scalar_one_or_none()
+        if project:
+            return project
+
+    result = db.execute(
+        select(Project).where(Project.user_id == user.id, Project.is_default == True)  # noqa: E712
     )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        project = Project(name="Default", user_id=user.id, is_default=True)
+        db.add(project)
+        db.flush()
+
+    user.active_project_id = project.id
+    db.commit()
+    return project
+
+
+def _get_user_active_folders(db: Session, user: User) -> list[str]:
+    """Get list of folder paths that are active for search for the user's active project."""
+    project = _get_active_project(db, user)
+    if project.is_default:
+        result = db.execute(
+            select(UserFolderSetting.folder_path).where(
+                UserFolderSetting.user_id == user.id,
+                UserFolderSetting.search_active == True,  # noqa: E712
+            )
+        )
+    else:
+        result = db.execute(
+            select(ProjectFolderSetting.folder_path).where(
+                ProjectFolderSetting.project_id == project.id,
+                ProjectFolderSetting.search_active == True,  # noqa: E712
+            )
+        )
     return [row[0] for row in result.fetchall()]
 
 
@@ -183,7 +217,7 @@ def search(
         if user_name:
             # User-based folder filtering
             user = _get_or_create_user(db, user_name)
-            user_active_folders = _get_user_active_folders(db, user.id)
+            user_active_folders = _get_user_active_folders(db, user)
 
             if not user_active_folders:
                 return []
@@ -286,7 +320,7 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
         user_active_folders = None
         if user_name:
             user = _get_or_create_user(db, user_name)
-            user_active_folders = _get_user_active_folders(db, user.id)
+            user_active_folders = _get_user_active_folders(db, user)
             if not user_active_folders:
                 return []
 
@@ -681,28 +715,44 @@ def set_folder_active(
     with Session(engine) as db:
         # Get or create user
         user = _get_or_create_user(db, user_name)
+        project = _get_active_project(db, user)
 
         # Update or create settings for all folders
         subfolders_updated = 0
         for f in folders_to_update:
-            result = db.execute(
-                select(UserFolderSetting).where(
-                    UserFolderSetting.user_id == user.id,
-                    UserFolderSetting.folder_path == f,
+            if project.is_default:
+                result = db.execute(
+                    select(UserFolderSetting).where(
+                        UserFolderSetting.user_id == user.id,
+                        UserFolderSetting.folder_path == f,
+                    )
                 )
-            )
-            setting = result.scalar_one_or_none()
-
-            if setting:
-                setting.search_active = is_active
+                setting = result.scalar_one_or_none()
+                if setting:
+                    setting.search_active = is_active
+                else:
+                    db.add(UserFolderSetting(
+                        user_id=user.id,
+                        folder_path=f,
+                        enabled=False,
+                        search_active=is_active,
+                    ))
             else:
-                setting = UserFolderSetting(
-                    user_id=user.id,
-                    folder_path=f,
-                    enabled=False,  # Don't auto-enable indexing
-                    search_active=is_active,
+                result = db.execute(
+                    select(ProjectFolderSetting).where(
+                        ProjectFolderSetting.project_id == project.id,
+                        ProjectFolderSetting.folder_path == f,
+                    )
                 )
-                db.add(setting)
+                setting = result.scalar_one_or_none()
+                if setting:
+                    setting.search_active = is_active
+                else:
+                    db.add(ProjectFolderSetting(
+                        project_id=project.id,
+                        folder_path=f,
+                        search_active=is_active,
+                    ))
 
             if f != folder_path:
                 subfolders_updated += 1
@@ -730,13 +780,20 @@ def get_folder_active_states() -> list[FolderActiveState]:
     engine = get_sync_engine()
 
     with Session(engine) as db:
-        user_settings = {}
+        project_settings = {}
         if user_name:
             user = _get_or_create_user(db, user_name)
-            result = db.execute(
-                select(UserFolderSetting).where(UserFolderSetting.user_id == user.id)
-            )
-            user_settings = {s.folder_path: s.search_active for s in result.scalars().all()}
+            project = _get_active_project(db, user)
+            if project.is_default:
+                result = db.execute(
+                    select(UserFolderSetting).where(UserFolderSetting.user_id == user.id)
+                )
+                project_settings = {s.folder_path: s.search_active for s in result.scalars().all()}
+            else:
+                result = db.execute(
+                    select(ProjectFolderSetting).where(ProjectFolderSetting.project_id == project.id)
+                )
+                project_settings = {s.folder_path: s.search_active for s in result.scalars().all()}
 
         # Get all indexed folders
         result = db.execute(select(FolderIndexStatus.folder_path))
@@ -745,7 +802,7 @@ def get_folder_active_states() -> list[FolderActiveState]:
         # Without a user, all folders are active
         results = []
         for folder in all_folders:
-            is_active = user_settings.get(folder, False) if user_name else True
+            is_active = project_settings.get(folder, False) if user_name else True
             results.append(
                 FolderActiveState(
                     folder_path=folder,

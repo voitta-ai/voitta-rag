@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from ..config import get_settings
-from .models import Base, User
+from .models import Base, Project, User
 
 
 def _set_sqlite_pragmas(dbapi_conn, connection_record):
@@ -106,6 +106,29 @@ def _migrate_missing_columns(engine: Engine) -> None:
                     )
 
 
+def _migrate_projects(engine: Engine) -> None:
+    """Create default projects for users that don't have any.
+
+    The Default project uses UserFolderSetting.search_active as its backing
+    store, so no data copying is needed.
+    """
+    from sqlalchemy.orm import Session
+
+    with Session(engine) as session:
+        users = session.query(User).all()
+        for user in users:
+            existing = session.query(Project).filter(Project.user_id == user.id).first()
+            if existing:
+                continue
+
+            project = Project(name="Default", user_id=user.id, is_default=True)
+            session.add(project)
+            session.flush()
+            user.active_project_id = project.id
+
+        session.commit()
+
+
 def init_db() -> None:
     """Initialize database tables and seed default users."""
     from sqlalchemy.orm import Session
@@ -117,6 +140,9 @@ def init_db() -> None:
 
     # Add any new columns to existing tables
     _migrate_missing_columns(sync_engine)
+
+    # Create default projects and migrate search_active settings
+    _migrate_projects(sync_engine)
 
     # Seed users from users.txt if enabled
     import os

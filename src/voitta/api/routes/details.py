@@ -8,8 +8,8 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
-from ..deps import DB, CurrentUser, Filesystem, Metadata
-from ...db.models import FolderIndexStatus, FolderSyncSource, IndexedFile, UserFolderSetting
+from ..deps import DB, CurrentUser, Filesystem, Metadata, get_active_project
+from ...db.models import FolderIndexStatus, FolderSyncSource, IndexedFile, ProjectFolderSetting, UserFolderSetting
 
 router = APIRouter()
 
@@ -91,7 +91,20 @@ async def get_item_details(
         )
         setting = result.scalar_one_or_none()
         folder_enabled = setting.enabled if setting else False
-        search_active = setting.search_active if setting else False
+
+        # Get search_active from active project
+        project = await get_active_project(user, db)
+        if project.is_default:
+            search_active = setting.search_active if setting else False
+        else:
+            result = await db.execute(
+                select(ProjectFolderSetting).where(
+                    ProjectFolderSetting.project_id == project.id,
+                    ProjectFolderSetting.folder_path == path,
+                )
+            )
+            project_setting = result.scalar_one_or_none()
+            search_active = project_setting.search_active if project_setting else False
 
         # Get index status
         result = await db.execute(

@@ -25,11 +25,20 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     password: Mapped[str | None] = mapped_column(String(255), nullable=True)  # For future auth
+    active_project_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("projects.id", use_alter=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
 
     # Relationships
     folder_settings: Mapped[list["UserFolderSetting"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
+    )
+    projects: Mapped[list["Project"]] = relationship(
+        back_populates="user", foreign_keys="Project.user_id"
+    )
+    active_project: Mapped["Project | None"] = relationship(
+        foreign_keys=[active_project_id], post_update=True
     )
     metadata_updates: Mapped[list["FileMetadata"]] = relationship(back_populates="updated_by_user")
 
@@ -68,6 +77,41 @@ class UserFolderSetting(Base):
 
     # Relationships
     user: Mapped[User] = relationship(back_populates="folder_settings")
+
+
+class Project(Base):
+    """Named project containing a set of search-active folders."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey("users.id"), nullable=False)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_user_project_name"),)
+
+    user: Mapped["User"] = relationship(back_populates="projects", foreign_keys=[user_id])
+    folder_settings: Mapped[list["ProjectFolderSetting"]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class ProjectFolderSetting(Base):
+    """Per-project folder search-active settings."""
+
+    __tablename__ = "project_folder_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(Integer, ForeignKey("projects.id"), nullable=False)
+    folder_path: Mapped[str] = mapped_column(String(1000), nullable=False, index=True)
+    search_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utc_now)
+
+    __table_args__ = (UniqueConstraint("project_id", "folder_path", name="uq_project_folder"),)
+
+    project: Mapped["Project"] = relationship(back_populates="folder_settings")
 
 
 class FolderIndexStatus(Base):
