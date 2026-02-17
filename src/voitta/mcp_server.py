@@ -3,6 +3,7 @@
 import logging
 import mimetypes
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -178,6 +179,21 @@ class FileUriResult(BaseModel):
     mime_type: str = Field(description="MIME type of the file")
 
 
+def _parse_date_to_epoch(value: str) -> int:
+    """Parse an ISO 8601 or YYYY-MM-DD string to Unix epoch int.
+
+    Bare dates like "2025-01-15" are treated as midnight UTC.
+    """
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"Invalid date format: {value!r}. Use YYYY-MM-DD or ISO 8601.")
+    # If no timezone info, assume UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
 @mcp.tool()
 def search(
     query: str,
@@ -185,6 +201,9 @@ def search(
     include_folders: list[str] | None = None,
     exclude_folders: list[str] | None = None,
     sparse_weight: float | None = None,
+    date_start: str | None = None,
+    date_end: str | None = None,
+    date_field: str | None = None,
 ) -> list[SearchResult]:
     """Search indexed documents using hybrid semantic + keyword similarity.
 
@@ -194,6 +213,9 @@ def search(
         include_folders: Folder paths to restrict search to
         exclude_folders: Folder paths to exclude
         sparse_weight: BM25 vs semantic balance: 0.0 = pure semantic, 1.0 = pure keyword. Defaults to 0.1.
+        date_start: Only include documents from this date onward (ISO 8601 or YYYY-MM-DD, UTC)
+        date_end: Only include documents up to this date (ISO 8601 or YYYY-MM-DD, UTC)
+        date_field: Which timestamp to filter on: "created" or "modified" (default: "modified")
 
     Returns:
         List of matching document chunks with metadata and similarity scores
@@ -257,6 +279,10 @@ def search(
         )
         disabled_index_folders = [row[0] for row in result.fetchall()]
 
+    # Parse date filters to epoch ints
+    epoch_start = _parse_date_to_epoch(date_start) if date_start else None
+    epoch_end = _parse_date_to_epoch(date_end) if date_end else None
+
     # Generate query embeddings (dense + sparse)
     query_embedding = embedding_service.embed_query(query)
     sparse_service = get_sparse_embedding_service()
@@ -271,6 +297,9 @@ def search(
         exclude_index_folders=disabled_index_folders if disabled_index_folders else None,
         sparse_query=sparse_query,
         sparse_weight=sparse_weight,
+        date_start=epoch_start,
+        date_end=epoch_end,
+        date_field=date_field,
     )
 
     # Get file metadata from database

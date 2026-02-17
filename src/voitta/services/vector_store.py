@@ -327,8 +327,11 @@ class VectorStoreService:
         include_folders: list[str] | None = None,
         exclude_folders: list[str] | None = None,
         exclude_index_folders: list[str] | None = None,
+        date_start: int | None = None,
+        date_end: int | None = None,
+        date_field: str | None = None,
     ) -> qmodels.Filter | None:
-        """Build a Qdrant filter from folder constraints."""
+        """Build a Qdrant filter from folder and date constraints."""
         must_conditions = []
         must_not_conditions = []
 
@@ -365,6 +368,21 @@ class VectorStoreService:
                         match=qmodels.MatchValue(value=folder),
                     )
                 )
+
+        if date_start is not None or date_end is not None:
+            field_map = {"created": "source_created_at", "modified": "source_modified_at"}
+            key = field_map.get(date_field, "source_modified_at") if date_field else "source_modified_at"
+            range_params = {}
+            if date_start is not None:
+                range_params["gte"] = date_start
+            if date_end is not None:
+                range_params["lte"] = date_end
+            must_conditions.append(
+                qmodels.FieldCondition(
+                    key=key,
+                    range=qmodels.Range(**range_params),
+                )
+            )
 
         if must_conditions or must_not_conditions:
             return qmodels.Filter(
@@ -409,6 +427,9 @@ class VectorStoreService:
         exclude_index_folders: list[str] | None = None,
         sparse_query: tuple[list[int], list[float]] | None = None,
         sparse_weight: float = 0.1,
+        date_start: int | None = None,
+        date_end: int | None = None,
+        date_field: str | None = None,
     ) -> list[StoredChunk]:
         """Search for similar chunks using dense or hybrid (dense + sparse) retrieval.
 
@@ -422,12 +443,16 @@ class VectorStoreService:
             sparse_query: Optional (indices, values) for BM25 sparse query
             sparse_weight: Weight for sparse/keyword results (0-1). Default 0.9.
                            Dense weight is (1 - sparse_weight).
+            date_start: Optional Unix epoch lower bound for date filtering
+            date_end: Optional Unix epoch upper bound for date filtering
+            date_field: "created" or "modified" (default: "modified")
 
         Returns:
             List of matching chunks with scores
         """
         search_filter = self._build_filter(
             folder_filter, include_folders, exclude_folders, exclude_index_folders,
+            date_start=date_start, date_end=date_end, date_field=date_field,
         )
 
         # Hybrid search: use Qdrant prefetch with both dense and sparse
