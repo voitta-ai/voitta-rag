@@ -291,6 +291,11 @@ async function refreshFileList() {
             // Replace file list content
             fileList.innerHTML = html;
 
+            // Re-apply current sort order
+            if (currentSortColumn !== 'name' || !currentSortAsc) {
+                sortFileList(currentSortColumn);
+            }
+
             // Restore selection if the item still exists
             if (prevSelectedPath) {
                 const item = fileList.querySelector(`.file-item[data-path="${CSS.escape(prevSelectedPath)}"]`);
@@ -401,10 +406,18 @@ async function createFolder(event) {
 
 let deleteFolderTargetPath = null;
 
+function _isAnamnesisPath(p) {
+    return p === 'Anamnesis' || (p && p.startsWith('Anamnesis/'));
+}
+
 function openDeleteFolderModal() {
     const targetPath = selectedPath || currentPath;
     if (!targetPath) {
         showToast('No folder selected', 'error');
+        return;
+    }
+    if (_isAnamnesisPath(targetPath)) {
+        showToast('Anamnesis folder is read-only', 'error');
         return;
     }
     deleteFolderTargetPath = targetPath;
@@ -517,6 +530,8 @@ async function loadItemDetails(path, isDir = true) {
 }
 
 function updateSidebar(details) {
+    const isAnamnesis = _isAnamnesisPath(details.path);
+
     // Update header
     const titleEl = document.getElementById('selected-item-title');
     const pathEl = document.getElementById('selected-item-path');
@@ -550,6 +565,10 @@ function updateSidebar(details) {
                 };
                 statusValue.textContent = statusLabels[details.index_status] || 'Not indexed';
             }
+
+            // Hide delete button for Anamnesis (read-only)
+            const dangerZone = folderSettingsSection.querySelector('.folder-danger-zone');
+            if (dangerZone) dangerZone.style.display = isAnamnesis ? 'none' : '';
         } else {
             folderSettingsSection.style.display = 'none';
         }
@@ -595,6 +614,7 @@ function updateSidebar(details) {
 
     if (metadataText) {
         metadataText.value = details.metadata_text || '';
+        metadataText.readOnly = isAnamnesis;
     }
 
     if (metadataInfo) {
@@ -606,11 +626,11 @@ function updateSidebar(details) {
     // Update folder sync status in properties card
     updateFolderSyncStatus(details.sync_status, details.last_synced_at);
 
-    // Show/hide sync source section
+    // Show/hide sync source section (hidden for Anamnesis)
     currentFolderIsEmpty = details.is_empty;
     const syncSection = document.getElementById('sync-source-section');
     if (syncSection) {
-        if (details.is_dir && (details.sync_source_type || details.is_empty)) {
+        if (!isAnamnesis && details.is_dir && (details.sync_source_type || details.is_empty)) {
             syncSection.style.display = 'block';
             loadSyncSource(details.path);
         } else {
@@ -1691,6 +1711,206 @@ async function loadSyncSource(folderPath) {
         // No sync source configured
     }
     clearSyncFields();
+}
+
+// ============================================
+// File List Sorting
+// ============================================
+
+let currentSortColumn = 'name';
+let currentSortAsc = true;
+
+function sortFileList(column) {
+    if (currentSortColumn === column) {
+        currentSortAsc = !currentSortAsc;
+    } else {
+        currentSortColumn = column;
+        currentSortAsc = true;
+    }
+
+    // Update header indicators
+    document.querySelectorAll('.sortable-header').forEach(h => {
+        const arrow = h.querySelector('.sort-arrow');
+        if (h.dataset.sort === column) {
+            h.classList.add('active');
+            arrow.textContent = currentSortAsc ? '▲' : '▼';
+        } else {
+            h.classList.remove('active');
+            arrow.textContent = '';
+        }
+    });
+
+    const list = document.getElementById('file-list');
+    if (!list) return;
+
+    const items = Array.from(list.querySelectorAll('.file-item'));
+    if (items.length === 0) return;
+
+    const indexOrder = { indexing: 0, pending: 1, indexed: 2, error: 3, disabled: 4, none: 5 };
+
+    items.sort((a, b) => {
+        // Folders always before files
+        const aDir = a.dataset.isDir === '1';
+        const bDir = b.dataset.isDir === '1';
+        if (aDir !== bDir) return aDir ? -1 : 1;
+
+        let cmp = 0;
+        switch (column) {
+            case 'name':
+                cmp = (a.dataset.name || '').localeCompare(b.dataset.name || '');
+                break;
+            case 'search': {
+                const aActive = a.dataset.searchActive === 'true' ? 1 : 0;
+                const bActive = b.dataset.searchActive === 'true' ? 1 : 0;
+                cmp = aActive - bActive;
+                break;
+            }
+            case 'size':
+                cmp = (parseInt(a.dataset.size) || 0) - (parseInt(b.dataset.size) || 0);
+                break;
+            case 'index': {
+                const aIdx = indexOrder[a.dataset.indexStatus] ?? 5;
+                const bIdx = indexOrder[b.dataset.indexStatus] ?? 5;
+                cmp = aIdx - bIdx;
+                break;
+            }
+        }
+        return currentSortAsc ? cmp : -cmp;
+    });
+
+    for (const item of items) {
+        list.appendChild(item);
+    }
+}
+
+// ============================================
+// Project Management
+// ============================================
+
+async function onProjectChange(value) {
+    const select = document.getElementById('project-select');
+    if (value === '__manage__') {
+        // Revert to current project
+        select.value = String(currentProjectId);
+        openProjectModal();
+        return;
+    }
+
+    try {
+        const response = await fetch(`/api/projects/${value}/select`, { method: 'PUT' });
+        if (!response.ok) throw new Error('Failed to switch project');
+        const data = await response.json();
+        currentProjectId = data.active_project_id;
+        refreshFileList();
+        // Reload sidebar details for current path
+        const targetPath = selectedPath || currentPath;
+        if (targetPath) loadItemDetails(targetPath, selectedIsDir);
+    } catch (error) {
+        showToast(error.message, 'error');
+        select.value = String(currentProjectId);
+    }
+}
+
+function openProjectModal() {
+    document.getElementById('project-modal').classList.add('active');
+    loadProjectList();
+}
+
+function closeProjectModal() {
+    document.getElementById('project-modal').classList.remove('active');
+}
+
+async function loadProjectList() {
+    try {
+        const response = await fetch('/api/projects/');
+        if (!response.ok) throw new Error('Failed to load projects');
+        const data = await response.json();
+
+        const list = document.getElementById('project-list');
+        list.innerHTML = '';
+        for (const project of data.projects) {
+            const item = document.createElement('div');
+            item.className = 'project-item';
+            item.innerHTML = `
+                <span class="project-item-name">${escapeHtml(project.name)}${project.is_default ? ' <span class="project-default-badge">default</span>' : ''}</span>
+                ${!project.is_default ? `<button class="btn btn-text btn-sm project-delete-btn" onclick="deleteProject(${project.id}, '${escapeHtml(project.name)}')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                </button>` : ''}
+            `;
+            list.appendChild(item);
+        }
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+async function createProject(event) {
+    event.preventDefault();
+    const input = document.getElementById('new-project-name');
+    const name = input.value.trim();
+    if (!name) return;
+
+    try {
+        const response = await fetch('/api/projects/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name }),
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to create project');
+        }
+
+        const project = await response.json();
+        input.value = '';
+
+        // Add option to dropdown (before the "Manage Projects..." option)
+        const select = document.getElementById('project-select');
+        const manageOpt = select.querySelector('option[value="__manage__"]');
+        const opt = document.createElement('option');
+        opt.value = project.id;
+        opt.textContent = project.name;
+        select.insertBefore(opt, manageOpt);
+
+        showToast(`Created project: ${name}`, 'success');
+        loadProjectList();
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+async function deleteProject(id, name) {
+    if (!confirm(`Delete project "${name}"?`)) return;
+
+    try {
+        const response = await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to delete project');
+        }
+
+        const data = await response.json();
+
+        // Remove option from dropdown
+        const select = document.getElementById('project-select');
+        const opt = select.querySelector(`option[value="${id}"]`);
+        if (opt) opt.remove();
+
+        // If deleted project was active, switch to the new active
+        if (currentProjectId === id) {
+            currentProjectId = data.active_project_id;
+            select.value = String(currentProjectId);
+            refreshFileList();
+            const targetPath = selectedPath || currentPath;
+            if (targetPath) loadItemDetails(targetPath, selectedIsDir);
+        }
+
+        showToast(`Deleted project: ${name}`, 'success');
+        loadProjectList();
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
 }
 
 // ============================================

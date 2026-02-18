@@ -42,6 +42,9 @@ async def create_folder(
     fs: Filesystem,
 ):
     """Create a new folder."""
+    target = request.path
+    if target == "Anamnesis" or target.startswith("Anamnesis/"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
     try:
         info = fs.create_folder(request.path, request.name)
         return FolderItemResponse(
@@ -68,6 +71,8 @@ async def delete_folder(
     db: DB,
 ):
     """Delete a folder and all its contents, including associated DB records."""
+    if path == "Anamnesis" or path.startswith("Anamnesis/"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
     from ...services.watcher import file_watcher
 
     # Suppress watcher events during bulk delete

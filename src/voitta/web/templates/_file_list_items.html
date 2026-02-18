@@ -10,6 +10,9 @@
      data-path="{{ item.path }}"
      data-index-status="{{ item_index_status }}"
      data-search-active="{{ 'true' if item_search_active else 'false' }}"
+     data-name="{{ item.name|lower }}"
+     data-is-dir="{{ '1' if item.is_dir else '0' }}"
+     data-size="{{ stats.get('total_size', 0) if item.is_dir and stats else (item.size if not item.is_dir else 0) }}"
      onclick="selectItem(this, '{{ item.path }}', {{ 'true' if item.is_dir else 'false' }})">
     <div class="col-name">
         {% if item.is_dir %}
@@ -59,6 +62,11 @@
             <path d="M3 7l9-5 9 5-9 5-9-5z" fill="#0061D5" opacity="0.5"/>
             <path d="M3 7v10l9 5V12L3 7z" fill="#0061D5" opacity="0.75"/>
             <path d="M21 7v10l-9 5V12l9-5z" fill="#0061D5"/>
+        </svg>
+        {% elif item.path == 'Anamnesis' or item.path.startswith('Anamnesis/') %}
+        <svg viewBox="0 0 24 24" class="sync-source-icon" title="Anamnesis">
+            <path d="M12 2C9 7 7 10.5 7 14a5 5 0 0010 0c0-3.5-2-7-5-12z" fill="#e8a735"/>
+            <path d="M12 8c-1.5 3-2.5 5-2.5 7a2.5 2.5 0 005 0c0-2-1-4-2.5-7z" fill="#fdd835"/>
         </svg>
         {% endif %}
     </div>

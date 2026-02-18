@@ -4,29 +4,39 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 
-from ..deps import DB, CurrentUser, Filesystem, Metadata, OptionalUser
-from ...db.models import FolderIndexStatus, FolderSyncSource, IndexedFile, User, UserFolderSetting
+from ..deps import DB, CurrentUser, Filesystem, Metadata, OptionalUser, get_active_project
+from ...db.models import FolderIndexStatus, FolderSyncSource, IndexedFile, Project, ProjectFolderSetting, User, UserFolderSetting
 
 router = APIRouter()
 
 
-async def _gather_file_list_data(path: str, user, fs, db):
+async def _gather_file_list_data(path: str, user, fs, db, active_project=None):
     """Gather all data needed to render the file list items."""
     items = fs.list_directory(path)
 
     folder_paths = [item.path for item in items if item.is_dir]
 
-    # Get search_active status for all folders in the listing (per user)
+    # Get search_active status based on active project
     folder_search_states = {}
-    if folder_paths:
-        result = await db.execute(
-            select(UserFolderSetting).where(
-                UserFolderSetting.user_id == user.id,
-                UserFolderSetting.folder_path.in_(folder_paths),
+    if folder_paths and active_project:
+        if active_project.is_default:
+            result = await db.execute(
+                select(UserFolderSetting).where(
+                    UserFolderSetting.user_id == user.id,
+                    UserFolderSetting.folder_path.in_(folder_paths),
+                )
             )
-        )
-        for setting in result.scalars().all():
-            folder_search_states[setting.folder_path] = setting.search_active
+            for setting in result.scalars().all():
+                folder_search_states[setting.folder_path] = setting.search_active
+        else:
+            result = await db.execute(
+                select(ProjectFolderSetting).where(
+                    ProjectFolderSetting.project_id == active_project.id,
+                    ProjectFolderSetting.folder_path.in_(folder_paths),
+                )
+            )
+            for setting in result.scalars().all():
+                folder_search_states[setting.folder_path] = setting.search_active
 
     # Get index status for all folders in the listing
     index_statuses = {}
@@ -253,6 +263,15 @@ async def browse(
     if path:
         current_metadata, metadata_user = await metadata_svc.get_metadata_with_user(path)
 
+    # Resolve active project
+    active_project = await get_active_project(user, db)
+
+    # Get user's projects list
+    result = await db.execute(
+        select(Project).where(Project.user_id == user.id).order_by(Project.created_at)
+    )
+    projects = result.scalars().all()
+
     # Get folder enabled and search_active status for current user
     folder_enabled = False
     folder_search_active = False
@@ -265,10 +284,21 @@ async def browse(
         )
         setting = result.scalar_one_or_none()
         folder_enabled = setting.enabled if setting else False
-        folder_search_active = setting.search_active if setting else False
+
+        if active_project.is_default:
+            folder_search_active = setting.search_active if setting else False
+        else:
+            result = await db.execute(
+                select(ProjectFolderSetting).where(
+                    ProjectFolderSetting.project_id == active_project.id,
+                    ProjectFolderSetting.folder_path == path,
+                )
+            )
+            project_setting = result.scalar_one_or_none()
+            folder_search_active = project_setting.search_active if project_setting else False
 
     # Gather file list data using shared helper
-    file_list_data = await _gather_file_list_data(path, user, fs, db)
+    file_list_data = await _gather_file_list_data(path, user, fs, db, active_project)
 
     # Also get current folder's index status
     current_index_status = None
@@ -278,6 +308,8 @@ async def browse(
         )
         status_row = result.scalar_one_or_none()
         current_index_status = status_row.status if status_row else "none"
+
+    is_anamnesis = path == "Anamnesis" or path.startswith("Anamnesis/")
 
     templates = get_templates(request)
     return templates.TemplateResponse(
@@ -293,6 +325,9 @@ async def browse(
             "folder_enabled": folder_enabled,
             "folder_search_active": folder_search_active,
             "current_index_status": current_index_status,
+            "projects": projects,
+            "active_project_id": active_project.id,
+            "is_anamnesis": is_anamnesis,
             **file_list_data,
         },
     )
@@ -308,8 +343,9 @@ async def browse_list(
     path: str = "",
 ):
     """Return rendered HTML fragment for file list items (AJAX refresh)."""
+    active_project = await get_active_project(user, db)
     try:
-        file_list_data = await _gather_file_list_data(path, user, fs, db)
+        file_list_data = await _gather_file_list_data(path, user, fs, db, active_project)
     except (FileNotFoundError, NotADirectoryError):
         return HTMLResponse("")
 

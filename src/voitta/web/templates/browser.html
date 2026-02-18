@@ -22,6 +22,18 @@
             {% endfor %}
         </nav>
 
+        <div class="project-selector">
+            <select id="project-select" class="project-select" onchange="onProjectChange(this.value)">
+                {% for project in projects %}
+                <option value="{{ project.id }}" {% if project.id == active_project_id %}selected{% endif %}>
+                    {{ project.name }}
+                </option>
+                {% endfor %}
+                <option value="__manage__">Manage Projects...</option>
+            </select>
+        </div>
+
+        {% if not is_anamnesis %}
         <div class="toolbar-actions">
             <button class="btn btn-secondary" onclick="openCreateFolderModal()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
@@ -41,6 +53,7 @@
             </button>
             <input type="file" id="file-upload" multiple style="display: none" onchange="uploadFiles(this.files)">
         </div>
+        {% endif %}
     </div>
 
     <div class="browser-layout">
@@ -48,11 +61,11 @@
         <div class="file-list-container">
             <!-- Column Headers -->
             <div class="file-list-header">
-                <div class="col-name">Name</div>
+                <div class="col-name sortable-header active" data-sort="name" onclick="sortFileList('name')">Name <span class="sort-arrow">▲</span></div>
                 <div class="col-sync-icon"></div>
-                <div class="col-search">Search</div>
-                <div class="col-size">Size</div>
-                <div class="col-status">Index</div>
+                <div class="col-search sortable-header" data-sort="search" onclick="sortFileList('search')">Search <span class="sort-arrow"></span></div>
+                <div class="col-size sortable-header" data-sort="size" onclick="sortFileList('size')">Size <span class="sort-arrow"></span></div>
+                <div class="col-status sortable-header" data-sort="index" onclick="sortFileList('index')">Index <span class="sort-arrow"></span></div>
             </div>
             <div class="file-list" id="file-list">
                 {% include '_file_list_items.html' %}
@@ -117,6 +130,7 @@
                     <span class="sync-last-synced" id="folder-sync-last-synced"></span>
                 </div>
 
+                {% if not is_anamnesis %}
                 <div class="folder-danger-zone">
                     <button class="btn btn-danger btn-sm" onclick="openDeleteFolderModal()">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
@@ -126,6 +140,7 @@
                         Delete Folder
                     </button>
                 </div>
+                {% endif %}
             </div>
 
             <!-- Remote Sync (only for folders) -->
@@ -410,7 +425,7 @@
                             id="metadata-text"
                             class="metadata-textarea"
                             placeholder="Add notes or metadata..."
-                            onchange="saveMetadata(this.value)">{{ current_metadata or '' }}</textarea>
+                            {% if is_anamnesis %}readonly{% else %}onchange="saveMetadata(this.value)"{% endif %}>{{ current_metadata or '' }}</textarea>
                         <p class="metadata-info" id="metadata-info">
                             {% if metadata_user %}Last updated by {{ metadata_user }}{% endif %}
                         </p>
@@ -509,6 +524,22 @@
     </div>
 </div>
 
+<!-- Project Management Modal -->
+<div class="modal" id="project-modal">
+    <div class="modal-backdrop" onclick="closeProjectModal()"></div>
+    <div class="modal-content">
+        <h2>Manage Projects</h2>
+        <div id="project-list" class="project-list"></div>
+        <form class="project-create-form" onsubmit="createProject(event)">
+            <input type="text" id="new-project-name" placeholder="New project name" required>
+            <button type="submit" class="btn btn-primary btn-sm">Create</button>
+        </form>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeProjectModal()">Close</button>
+        </div>
+    </div>
+</div>
+
 <!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
 {% endblock %}
@@ -516,6 +547,8 @@
 {% block scripts %}
 <script>
     const currentPath = "{{ current_path }}";
+    const isAnamnesis = {{ 'true' if is_anamnesis else 'false' }};
+    let currentProjectId = {{ active_project_id }};
 
     // Initialize WebSocket connection
     initWebSocket();

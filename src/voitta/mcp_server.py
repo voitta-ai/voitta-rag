@@ -2,7 +2,9 @@
 
 import logging
 import mimetypes
+import uuid
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastmcp import FastMCP
@@ -14,7 +16,7 @@ from starlette.requests import Request
 
 from .config import get_settings
 from .db.database import get_sync_engine
-from .db.models import FileMetadata, FolderIndexStatus, IndexedFile, User, UserFolderSetting
+from .db.models import FileMetadata, FolderIndexStatus, IndexedFile, Project, ProjectFolderSetting, User, UserFolderSetting
 from .services.embedding import get_embedding_service
 from .services.parsers import parse_file
 from .services.sparse_embedding import get_sparse_embedding_service
@@ -72,15 +74,57 @@ def _get_or_create_user(db: Session, user_name: str) -> User:
     return user
 
 
-def _get_user_active_folders(db: Session, user_id: int) -> list[str]:
-    """Get list of folder paths that are active for search for the user."""
-    result = db.execute(
-        select(UserFolderSetting.folder_path).where(
-            UserFolderSetting.user_id == user_id,
-            UserFolderSetting.search_active == True,  # noqa: E712
+def _get_active_project(db: Session, user: User) -> Project:
+    """Get the user's active project, creating a default project if needed."""
+    if user.active_project_id:
+        result = db.execute(
+            select(Project).where(Project.id == user.active_project_id)
         )
+        project = result.scalar_one_or_none()
+        if project:
+            return project
+
+    result = db.execute(
+        select(Project).where(Project.user_id == user.id, Project.is_default == True)  # noqa: E712
     )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        project = Project(name="Default", user_id=user.id, is_default=True)
+        db.add(project)
+        db.flush()
+
+    user.active_project_id = project.id
+    db.commit()
+    return project
+
+
+def _get_user_active_folders(db: Session, user: User) -> list[str]:
+    """Get list of folder paths that are active for search for the user's active project."""
+    project = _get_active_project(db, user)
+    if project.is_default:
+        result = db.execute(
+            select(UserFolderSetting.folder_path).where(
+                UserFolderSetting.user_id == user.id,
+                UserFolderSetting.search_active == True,  # noqa: E712
+            )
+        )
+    else:
+        result = db.execute(
+            select(ProjectFolderSetting.folder_path).where(
+                ProjectFolderSetting.project_id == project.id,
+                ProjectFolderSetting.search_active == True,  # noqa: E712
+            )
+        )
     return [row[0] for row in result.fetchall()]
+
+
+def _extract_memory_id(file_path: str) -> str | None:
+    """Extract memory UUID from an Anamnesis file path, or None."""
+    parts = file_path.split("/")
+    if len(parts) >= 3 and parts[0] == "Anamnesis" and parts[-1].endswith(".md"):
+        return parts[-1][:-3]  # strip .md
+    return None
 
 
 class SearchResult(BaseModel):
@@ -95,6 +139,7 @@ class SearchResult(BaseModel):
     chunk_index: int = Field(description="Index of this chunk within the file")
     total_chunks: int = Field(description="Total number of chunks in the file")
     file_metadata: str | None = Field(description="User-added metadata/notes for the file")
+    memory_id: str | None = Field(default=None, description="Memory UUID if this result is from Anamnesis")
 
 
 class IndexedFolderInfo(BaseModel):
@@ -144,6 +189,21 @@ class FileUriResult(BaseModel):
     mime_type: str = Field(description="MIME type of the file")
 
 
+def _parse_date_to_epoch(value: str) -> int:
+    """Parse an ISO 8601 or YYYY-MM-DD string to Unix epoch int.
+
+    Bare dates like "2025-01-15" are treated as midnight UTC.
+    """
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        raise ValueError(f"Invalid date format: {value!r}. Use YYYY-MM-DD or ISO 8601.")
+    # If no timezone info, assume UTC
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
 @mcp.tool()
 def search(
     query: str,
@@ -151,6 +211,9 @@ def search(
     include_folders: list[str] | None = None,
     exclude_folders: list[str] | None = None,
     sparse_weight: float | None = None,
+    date_start: str | None = None,
+    date_end: str | None = None,
+    date_field: str | None = None,
 ) -> list[SearchResult]:
     """Search indexed documents using hybrid semantic + keyword similarity.
 
@@ -160,6 +223,9 @@ def search(
         include_folders: Folder paths to restrict search to
         exclude_folders: Folder paths to exclude
         sparse_weight: BM25 vs semantic balance: 0.0 = pure semantic, 1.0 = pure keyword. Defaults to 0.1.
+        date_start: Only include documents from this date onward (ISO 8601 or YYYY-MM-DD, UTC)
+        date_end: Only include documents up to this date (ISO 8601 or YYYY-MM-DD, UTC)
+        date_field: Which timestamp to filter on: "created" or "modified" (default: "modified")
 
     Returns:
         List of matching document chunks with metadata and similarity scores
@@ -183,7 +249,7 @@ def search(
         if user_name:
             # User-based folder filtering
             user = _get_or_create_user(db, user_name)
-            user_active_folders = _get_user_active_folders(db, user.id)
+            user_active_folders = _get_user_active_folders(db, user)
 
             if not user_active_folders:
                 return []
@@ -223,6 +289,10 @@ def search(
         )
         disabled_index_folders = [row[0] for row in result.fetchall()]
 
+    # Parse date filters to epoch ints
+    epoch_start = _parse_date_to_epoch(date_start) if date_start else None
+    epoch_end = _parse_date_to_epoch(date_end) if date_end else None
+
     # Generate query embeddings (dense + sparse)
     query_embedding = embedding_service.embed_query(query)
     sparse_service = get_sparse_embedding_service()
@@ -237,6 +307,9 @@ def search(
         exclude_index_folders=disabled_index_folders if disabled_index_folders else None,
         sparse_query=sparse_query,
         sparse_weight=sparse_weight,
+        date_start=epoch_start,
+        date_end=epoch_end,
+        date_field=date_field,
     )
 
     # Get file metadata from database
@@ -265,6 +338,7 @@ def search(
                 chunk_index=chunk.metadata.chunk_index,
                 total_chunks=chunk.metadata.total_chunks,
                 file_metadata=file_metadata_map.get(chunk.metadata.file_path),
+                memory_id=_extract_memory_id(chunk.metadata.file_path),
             )
         )
 
@@ -286,7 +360,7 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
         user_active_folders = None
         if user_name:
             user = _get_or_create_user(db, user_name)
-            user_active_folders = _get_user_active_folders(db, user.id)
+            user_active_folders = _get_user_active_folders(db, user)
             if not user_active_folders:
                 return []
 
@@ -681,28 +755,44 @@ def set_folder_active(
     with Session(engine) as db:
         # Get or create user
         user = _get_or_create_user(db, user_name)
+        project = _get_active_project(db, user)
 
         # Update or create settings for all folders
         subfolders_updated = 0
         for f in folders_to_update:
-            result = db.execute(
-                select(UserFolderSetting).where(
-                    UserFolderSetting.user_id == user.id,
-                    UserFolderSetting.folder_path == f,
+            if project.is_default:
+                result = db.execute(
+                    select(UserFolderSetting).where(
+                        UserFolderSetting.user_id == user.id,
+                        UserFolderSetting.folder_path == f,
+                    )
                 )
-            )
-            setting = result.scalar_one_or_none()
-
-            if setting:
-                setting.search_active = is_active
+                setting = result.scalar_one_or_none()
+                if setting:
+                    setting.search_active = is_active
+                else:
+                    db.add(UserFolderSetting(
+                        user_id=user.id,
+                        folder_path=f,
+                        enabled=False,
+                        search_active=is_active,
+                    ))
             else:
-                setting = UserFolderSetting(
-                    user_id=user.id,
-                    folder_path=f,
-                    enabled=False,  # Don't auto-enable indexing
-                    search_active=is_active,
+                result = db.execute(
+                    select(ProjectFolderSetting).where(
+                        ProjectFolderSetting.project_id == project.id,
+                        ProjectFolderSetting.folder_path == f,
+                    )
                 )
-                db.add(setting)
+                setting = result.scalar_one_or_none()
+                if setting:
+                    setting.search_active = is_active
+                else:
+                    db.add(ProjectFolderSetting(
+                        project_id=project.id,
+                        folder_path=f,
+                        search_active=is_active,
+                    ))
 
             if f != folder_path:
                 subfolders_updated += 1
@@ -730,13 +820,20 @@ def get_folder_active_states() -> list[FolderActiveState]:
     engine = get_sync_engine()
 
     with Session(engine) as db:
-        user_settings = {}
+        project_settings = {}
         if user_name:
             user = _get_or_create_user(db, user_name)
-            result = db.execute(
-                select(UserFolderSetting).where(UserFolderSetting.user_id == user.id)
-            )
-            user_settings = {s.folder_path: s.search_active for s in result.scalars().all()}
+            project = _get_active_project(db, user)
+            if project.is_default:
+                result = db.execute(
+                    select(UserFolderSetting).where(UserFolderSetting.user_id == user.id)
+                )
+                project_settings = {s.folder_path: s.search_active for s in result.scalars().all()}
+            else:
+                result = db.execute(
+                    select(ProjectFolderSetting).where(ProjectFolderSetting.project_id == project.id)
+                )
+                project_settings = {s.folder_path: s.search_active for s in result.scalars().all()}
 
         # Get all indexed folders
         result = db.execute(select(FolderIndexStatus.folder_path))
@@ -745,7 +842,7 @@ def get_folder_active_states() -> list[FolderActiveState]:
         # Without a user, all folders are active
         results = []
         for folder in all_folders:
-            is_active = user_settings.get(folder, False) if user_name else True
+            is_active = project_settings.get(folder, False) if user_name else True
             results.append(
                 FolderActiveState(
                     folder_path=folder,
@@ -754,6 +851,286 @@ def get_folder_active_states() -> list[FolderActiveState]:
             )
 
         return results
+
+
+# ---------------------------------------------------------------------------
+# Anamnesis (per-user memory) models & tools
+# ---------------------------------------------------------------------------
+
+class MemoryResult(BaseModel):
+    """Result of a single-memory operation."""
+
+    success: bool = Field(description="Whether the operation succeeded")
+    memory_id: str | None = Field(default=None, description="Memory UUID")
+    content: str | None = Field(default=None, description="Memory text content")
+    created_at: str | None = Field(default=None, description="ISO creation timestamp")
+    modified_at: str | None = Field(default=None, description="ISO last-modified timestamp")
+    likes: int | None = Field(default=None, description="Like count")
+    dislikes: int | None = Field(default=None, description="Dislike count")
+    error: str | None = Field(default=None, description="Error message if failed")
+
+
+class MemoryListResult(BaseModel):
+    """Result of listing all user memories."""
+
+    success: bool = Field(description="Whether the operation succeeded")
+    memories: list[MemoryResult] = Field(default_factory=list, description="List of memories")
+    error: str | None = Field(default=None, description="Error message if failed")
+
+
+def _trigger_anamnesis_reindex(user_name: str) -> None:
+    """Set the FolderIndexStatus for Anamnesis/<user> to 'pending'."""
+    from .services.anamnesis import _anamnesis_folder_path
+
+    folder = _anamnesis_folder_path(user_name)
+    engine = get_sync_engine()
+    with Session(engine) as db:
+        result = db.execute(
+            select(FolderIndexStatus).where(FolderIndexStatus.folder_path == folder)
+        )
+        status = result.scalar_one_or_none()
+        if status:
+            status.status = "pending"
+        else:
+            db.add(FolderIndexStatus(folder_path=folder, status="pending"))
+        db.commit()
+
+
+def _memory_to_result(data: dict) -> MemoryResult:
+    """Convert a parsed memory dict to a MemoryResult."""
+    return MemoryResult(
+        success=True,
+        memory_id=data.get("memory_id"),
+        content=data.get("content"),
+        created_at=data.get("created_at"),
+        modified_at=data.get("modified_at"),
+        likes=data.get("likes"),
+        dislikes=data.get("dislikes"),
+    )
+
+
+@mcp.tool()
+def create_memory(content: str) -> MemoryResult:
+    """Create a new memory note for the current user.
+
+    Args:
+        content: The text content of the memory
+
+    Returns:
+        The created memory with its UUID and metadata
+    """
+    from .services.anamnesis import read_memory, write_memory
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    memory_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    write_memory(user_name, memory_id, content, created_at=now, modified_at=now, likes=0, dislikes=0)
+    _trigger_anamnesis_reindex(user_name)
+
+    data = read_memory(user_name, memory_id)
+    return _memory_to_result(data)
+
+
+@mcp.tool()
+def get_memory(memory_id: str) -> MemoryResult:
+    """Get a specific memory by its UUID.
+
+    Args:
+        memory_id: The UUID of the memory
+
+    Returns:
+        The memory content and metadata
+    """
+    from .services.anamnesis import read_memory
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    try:
+        data = read_memory(user_name, memory_id)
+    except FileNotFoundError:
+        return MemoryResult(success=False, memory_id=memory_id, error="Memory not found")
+
+    return _memory_to_result(data)
+
+
+@mcp.tool()
+def update_memory(memory_id: str, content: str) -> MemoryResult:
+    """Update the content of an existing memory, preserving counters and created_at.
+
+    Args:
+        memory_id: The UUID of the memory to update
+        content: The new text content
+
+    Returns:
+        The updated memory
+    """
+    from .services.anamnesis import read_memory, write_memory
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    try:
+        existing = read_memory(user_name, memory_id)
+    except FileNotFoundError:
+        return MemoryResult(success=False, memory_id=memory_id, error="Memory not found")
+
+    now = datetime.now(timezone.utc)
+    write_memory(
+        user_name,
+        memory_id,
+        content,
+        created_at=datetime.fromisoformat(existing["created_at"]),
+        modified_at=now,
+        likes=existing["likes"],
+        dislikes=existing["dislikes"],
+    )
+    _trigger_anamnesis_reindex(user_name)
+
+    data = read_memory(user_name, memory_id)
+    return _memory_to_result(data)
+
+
+@mcp.tool()
+def delete_memory(memory_id: str) -> MemoryResult:
+    """Delete a memory and its indexed chunks.
+
+    Args:
+        memory_id: The UUID of the memory to delete
+
+    Returns:
+        Result indicating success or failure
+    """
+    from .services.anamnesis import _memory_rel_path, delete_memory_file
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    deleted = delete_memory_file(user_name, memory_id)
+    if not deleted:
+        return MemoryResult(success=False, memory_id=memory_id, error="Memory not found")
+
+    # Clean up Qdrant chunks and IndexedFile record
+    rel_path = _memory_rel_path(user_name, memory_id)
+    try:
+        vector_store = get_vector_store()
+        vector_store.delete_by_file(rel_path)
+    except Exception:
+        pass
+
+    engine = get_sync_engine()
+    with Session(engine) as db:
+        result = db.execute(
+            select(IndexedFile).where(IndexedFile.file_path == rel_path)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            db.delete(row)
+            db.commit()
+
+    _trigger_anamnesis_reindex(user_name)
+
+    return MemoryResult(success=True, memory_id=memory_id)
+
+
+@mcp.tool()
+def like_memory(memory_id: str) -> MemoryResult:
+    """Increment the like counter on a memory.
+
+    Args:
+        memory_id: The UUID of the memory to like
+
+    Returns:
+        The updated memory
+    """
+    from .services.anamnesis import read_memory, write_memory
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    try:
+        existing = read_memory(user_name, memory_id)
+    except FileNotFoundError:
+        return MemoryResult(success=False, memory_id=memory_id, error="Memory not found")
+
+    now = datetime.now(timezone.utc)
+    write_memory(
+        user_name,
+        memory_id,
+        existing["content"],
+        created_at=datetime.fromisoformat(existing["created_at"]),
+        modified_at=now,
+        likes=existing["likes"] + 1,
+        dislikes=existing["dislikes"],
+    )
+    _trigger_anamnesis_reindex(user_name)
+
+    data = read_memory(user_name, memory_id)
+    return _memory_to_result(data)
+
+
+@mcp.tool()
+def dislike_memory(memory_id: str) -> MemoryResult:
+    """Increment the dislike counter on a memory.
+
+    Args:
+        memory_id: The UUID of the memory to dislike
+
+    Returns:
+        The updated memory
+    """
+    from .services.anamnesis import read_memory, write_memory
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    try:
+        existing = read_memory(user_name, memory_id)
+    except FileNotFoundError:
+        return MemoryResult(success=False, memory_id=memory_id, error="Memory not found")
+
+    now = datetime.now(timezone.utc)
+    write_memory(
+        user_name,
+        memory_id,
+        existing["content"],
+        created_at=datetime.fromisoformat(existing["created_at"]),
+        modified_at=now,
+        likes=existing["likes"],
+        dislikes=existing["dislikes"] + 1,
+    )
+    _trigger_anamnesis_reindex(user_name)
+
+    data = read_memory(user_name, memory_id)
+    return _memory_to_result(data)
+
+
+@mcp.tool()
+def list_memories() -> MemoryListResult:
+    """List all memories for the current user.
+
+    Returns:
+        List of all memories with their content and metadata
+    """
+    from .services.anamnesis import list_user_memories
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryListResult(success=False, error="X-User-Name header required")
+
+    memories = list_user_memories(user_name)
+    return MemoryListResult(
+        success=True,
+        memories=[_memory_to_result(m) for m in memories],
+    )
 
 
 def _merge_chunks_with_overlap(chunks: list, chunk_overlap: int) -> str:

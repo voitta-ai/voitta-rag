@@ -590,10 +590,13 @@ class IndexingService:
                 else:
                     files_skipped += 1
 
-            # Update status to indexed
+            # Update status to indexed — but respect "pending" set by
+            # another session during indexing (e.g. Anamnesis memory update)
             if status:
-                status.status = "indexed"
-                status.indexed_at = datetime.now(timezone.utc)
+                db.refresh(status)
+                if status.status != "pending":
+                    status.status = "indexed"
+                    status.indexed_at = datetime.now(timezone.utc)
                 db.flush()
 
             logger.info(

@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
-from ..db.models import User
+from ..db.models import Project, User
 from ..services.filesystem import FilesystemService
 from ..services.metadata import MetadataService
 
@@ -57,6 +57,32 @@ async def get_metadata_service(
 ) -> MetadataService:
     """Get metadata service instance."""
     return MetadataService(db)
+
+
+async def get_active_project(user: User, db: AsyncSession) -> Project:
+    """Get the user's active project, creating a default project if needed."""
+    if user.active_project_id:
+        result = await db.execute(
+            select(Project).where(Project.id == user.active_project_id)
+        )
+        project = result.scalar_one_or_none()
+        if project:
+            return project
+
+    # Find existing default project
+    result = await db.execute(
+        select(Project).where(Project.user_id == user.id, Project.is_default == True)  # noqa: E712
+    )
+    project = result.scalar_one_or_none()
+
+    if not project:
+        project = Project(name="Default", user_id=user.id, is_default=True)
+        db.add(project)
+        await db.flush()
+
+    user.active_project_id = project.id
+    await db.flush()
+    return project
 
 
 # Type aliases for cleaner dependency injection

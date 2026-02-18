@@ -53,6 +53,8 @@ async def update_metadata(
     metadata_svc: Metadata,
 ):
     """Update metadata for a file or folder."""
+    if path == "Anamnesis" or path.startswith("Anamnesis/"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
     if not fs.exists(path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -74,6 +76,8 @@ async def delete_metadata(
     metadata_svc: Metadata,
 ):
     """Delete metadata for a file or folder."""
+    if path == "Anamnesis" or path.startswith("Anamnesis/"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
     deleted = await metadata_svc.delete_metadata(path)
     if not deleted:
         raise HTTPException(

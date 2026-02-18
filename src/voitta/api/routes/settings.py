@@ -4,8 +4,8 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from ..deps import DB, CurrentUser, Filesystem
-from ...db.models import FolderIndexStatus, UserFolderSetting
+from ..deps import DB, CurrentUser, Filesystem, get_active_project
+from ...db.models import FolderIndexStatus, ProjectFolderSetting, UserFolderSetting
 
 router = APIRouter()
 
@@ -42,19 +42,40 @@ async def get_folder_settings(
     db: DB,
 ):
     """Get all folder settings for current user."""
+    project = await get_active_project(user, db)
+
     result = await db.execute(
         select(UserFolderSetting).where(UserFolderSetting.user_id == user.id)
     )
-    settings = result.scalars().all()
+    user_settings = result.scalars().all()
+
+    if project.is_default:
+        # Default project: search_active lives in UserFolderSetting
+        return FolderSettingsListResponse(
+            settings=[
+                FolderSettingResponse(
+                    folder_path=s.folder_path,
+                    enabled=s.enabled,
+                    search_active=s.search_active,
+                )
+                for s in user_settings
+            ]
+        )
+
+    # Non-default project: search_active lives in ProjectFolderSetting
+    result = await db.execute(
+        select(ProjectFolderSetting).where(ProjectFolderSetting.project_id == project.id)
+    )
+    project_search = {s.folder_path: s.search_active for s in result.scalars().all()}
 
     return FolderSettingsListResponse(
         settings=[
             FolderSettingResponse(
                 folder_path=s.folder_path,
                 enabled=s.enabled,
-                search_active=s.search_active,
+                search_active=project_search.get(s.folder_path, False),
             )
-            for s in settings
+            for s in user_settings
         ]
     )
 
@@ -98,26 +119,45 @@ async def toggle_search_active(
     except (PermissionError, OSError):
         pass  # Continue with folders we could access
 
+    project = await get_active_project(user, db)
+
     # Update or create settings for all folders
     for folder in folders_to_update:
-        result = await db.execute(
-            select(UserFolderSetting).where(
-                UserFolderSetting.user_id == user.id,
-                UserFolderSetting.folder_path == folder,
+        if project.is_default:
+            # Default project: write to UserFolderSetting
+            result = await db.execute(
+                select(UserFolderSetting).where(
+                    UserFolderSetting.user_id == user.id,
+                    UserFolderSetting.folder_path == folder,
+                )
             )
-        )
-        setting = result.scalar_one_or_none()
-
-        if setting:
-            setting.search_active = request.search_active
+            setting = result.scalar_one_or_none()
+            if setting:
+                setting.search_active = request.search_active
+            else:
+                db.add(UserFolderSetting(
+                    user_id=user.id,
+                    folder_path=folder,
+                    enabled=False,
+                    search_active=request.search_active,
+                ))
         else:
-            setting = UserFolderSetting(
-                user_id=user.id,
-                folder_path=folder,
-                enabled=False,  # Don't auto-enable indexing
-                search_active=request.search_active,
+            # Non-default project: write to ProjectFolderSetting
+            result = await db.execute(
+                select(ProjectFolderSetting).where(
+                    ProjectFolderSetting.project_id == project.id,
+                    ProjectFolderSetting.folder_path == folder,
+                )
             )
-            db.add(setting)
+            setting = result.scalar_one_or_none()
+            if setting:
+                setting.search_active = request.search_active
+            else:
+                db.add(ProjectFolderSetting(
+                    project_id=project.id,
+                    folder_path=folder,
+                    search_active=request.search_active,
+                ))
 
     await db.flush()
 
@@ -210,10 +250,23 @@ async def get_folder_setting(
     )
     setting = result.scalar_one_or_none()
 
+    project = await get_active_project(user, db)
+    if project.is_default:
+        search_active = setting.search_active if setting else False
+    else:
+        result = await db.execute(
+            select(ProjectFolderSetting).where(
+                ProjectFolderSetting.project_id == project.id,
+                ProjectFolderSetting.folder_path == path,
+            )
+        )
+        project_setting = result.scalar_one_or_none()
+        search_active = project_setting.search_active if project_setting else False
+
     return FolderSettingResponse(
         folder_path=path,
         enabled=setting.enabled if setting else False,
-        search_active=setting.search_active if setting else False,
+        search_active=search_active,
     )
 
 
