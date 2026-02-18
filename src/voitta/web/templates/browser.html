@@ -33,6 +33,7 @@
             </select>
         </div>
 
+        {% if not is_anamnesis %}
         <div class="toolbar-actions">
             <button class="btn btn-secondary" onclick="openCreateFolderModal()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
@@ -52,6 +53,7 @@
             </button>
             <input type="file" id="file-upload" multiple style="display: none" onchange="uploadFiles(this.files)">
         </div>
+        {% endif %}
     </div>
 
     <div class="browser-layout">
@@ -128,6 +130,7 @@
                     <span class="sync-last-synced" id="folder-sync-last-synced"></span>
                 </div>
 
+                {% if not is_anamnesis %}
                 <div class="folder-danger-zone">
                     <button class="btn btn-danger btn-sm" onclick="openDeleteFolderModal()">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
@@ -137,6 +140,7 @@
                         Delete Folder
                     </button>
                 </div>
+                {% endif %}
             </div>
 
             <!-- Remote Sync (only for folders) -->
@@ -421,7 +425,7 @@
                             id="metadata-text"
                             class="metadata-textarea"
                             placeholder="Add notes or metadata..."
-                            onchange="saveMetadata(this.value)">{{ current_metadata or '' }}</textarea>
+                            {% if is_anamnesis %}readonly{% else %}onchange="saveMetadata(this.value)"{% endif %}>{{ current_metadata or '' }}</textarea>
                         <p class="metadata-info" id="metadata-info">
                             {% if metadata_user %}Last updated by {{ metadata_user }}{% endif %}
                         </p>
@@ -543,6 +547,7 @@
 {% block scripts %}
 <script>
     const currentPath = "{{ current_path }}";
+    const isAnamnesis = {{ 'true' if is_anamnesis else 'false' }};
     let currentProjectId = {{ active_project_id }};
 
     // Initialize WebSocket connection

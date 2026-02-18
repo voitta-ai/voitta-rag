@@ -406,10 +406,18 @@ async function createFolder(event) {
 
 let deleteFolderTargetPath = null;
 
+function _isAnamnesisPath(p) {
+    return p === 'Anamnesis' || (p && p.startsWith('Anamnesis/'));
+}
+
 function openDeleteFolderModal() {
     const targetPath = selectedPath || currentPath;
     if (!targetPath) {
         showToast('No folder selected', 'error');
+        return;
+    }
+    if (_isAnamnesisPath(targetPath)) {
+        showToast('Anamnesis folder is read-only', 'error');
         return;
     }
     deleteFolderTargetPath = targetPath;
@@ -522,6 +530,8 @@ async function loadItemDetails(path, isDir = true) {
 }
 
 function updateSidebar(details) {
+    const isAnamnesis = _isAnamnesisPath(details.path);
+
     // Update header
     const titleEl = document.getElementById('selected-item-title');
     const pathEl = document.getElementById('selected-item-path');
@@ -555,6 +565,10 @@ function updateSidebar(details) {
                 };
                 statusValue.textContent = statusLabels[details.index_status] || 'Not indexed';
             }
+
+            // Hide delete button for Anamnesis (read-only)
+            const dangerZone = folderSettingsSection.querySelector('.folder-danger-zone');
+            if (dangerZone) dangerZone.style.display = isAnamnesis ? 'none' : '';
         } else {
             folderSettingsSection.style.display = 'none';
         }
@@ -600,6 +614,7 @@ function updateSidebar(details) {
 
     if (metadataText) {
         metadataText.value = details.metadata_text || '';
+        metadataText.readOnly = isAnamnesis;
     }
 
     if (metadataInfo) {
@@ -611,11 +626,11 @@ function updateSidebar(details) {
     // Update folder sync status in properties card
     updateFolderSyncStatus(details.sync_status, details.last_synced_at);
 
-    // Show/hide sync source section
+    // Show/hide sync source section (hidden for Anamnesis)
     currentFolderIsEmpty = details.is_empty;
     const syncSection = document.getElementById('sync-source-section');
     if (syncSection) {
-        if (details.is_dir && (details.sync_source_type || details.is_empty)) {
+        if (!isAnamnesis && details.is_dir && (details.sync_source_type || details.is_empty)) {
             syncSection.style.display = 'block';
             loadSyncSource(details.path);
         } else {

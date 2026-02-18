@@ -309,6 +309,8 @@ async def browse(
         status_row = result.scalar_one_or_none()
         current_index_status = status_row.status if status_row else "none"
 
+    is_anamnesis = path == "Anamnesis" or path.startswith("Anamnesis/")
+
     templates = get_templates(request)
     return templates.TemplateResponse(
         request,
@@ -325,6 +327,7 @@ async def browse(
             "current_index_status": current_index_status,
             "projects": projects,
             "active_project_id": active_project.id,
+            "is_anamnesis": is_anamnesis,
             **file_list_data,
         },
     )

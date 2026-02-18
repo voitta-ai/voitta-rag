@@ -27,6 +27,8 @@ async def upload_file(
     path: str = Form(""),
 ):
     """Upload a file to the specified path."""
+    if path == "Anamnesis" or path.startswith("Anamnesis/"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
     if not file.filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

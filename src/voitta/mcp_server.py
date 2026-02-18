@@ -2,6 +2,7 @@
 
 import logging
 import mimetypes
+import uuid
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
@@ -118,6 +119,14 @@ def _get_user_active_folders(db: Session, user: User) -> list[str]:
     return [row[0] for row in result.fetchall()]
 
 
+def _extract_memory_id(file_path: str) -> str | None:
+    """Extract memory UUID from an Anamnesis file path, or None."""
+    parts = file_path.split("/")
+    if len(parts) >= 3 and parts[0] == "Anamnesis" and parts[-1].endswith(".md"):
+        return parts[-1][:-3]  # strip .md
+    return None
+
+
 class SearchResult(BaseModel):
     """A single search result."""
 
@@ -130,6 +139,7 @@ class SearchResult(BaseModel):
     chunk_index: int = Field(description="Index of this chunk within the file")
     total_chunks: int = Field(description="Total number of chunks in the file")
     file_metadata: str | None = Field(description="User-added metadata/notes for the file")
+    memory_id: str | None = Field(default=None, description="Memory UUID if this result is from Anamnesis")
 
 
 class IndexedFolderInfo(BaseModel):
@@ -328,6 +338,7 @@ def search(
                 chunk_index=chunk.metadata.chunk_index,
                 total_chunks=chunk.metadata.total_chunks,
                 file_metadata=file_metadata_map.get(chunk.metadata.file_path),
+                memory_id=_extract_memory_id(chunk.metadata.file_path),
             )
         )
 
@@ -840,6 +851,286 @@ def get_folder_active_states() -> list[FolderActiveState]:
             )
 
         return results
+
+
+# ---------------------------------------------------------------------------
+# Anamnesis (per-user memory) models & tools
+# ---------------------------------------------------------------------------
+
+class MemoryResult(BaseModel):
+    """Result of a single-memory operation."""
+
+    success: bool = Field(description="Whether the operation succeeded")
+    memory_id: str | None = Field(default=None, description="Memory UUID")
+    content: str | None = Field(default=None, description="Memory text content")
+    created_at: str | None = Field(default=None, description="ISO creation timestamp")
+    modified_at: str | None = Field(default=None, description="ISO last-modified timestamp")
+    likes: int | None = Field(default=None, description="Like count")
+    dislikes: int | None = Field(default=None, description="Dislike count")
+    error: str | None = Field(default=None, description="Error message if failed")
+
+
+class MemoryListResult(BaseModel):
+    """Result of listing all user memories."""
+
+    success: bool = Field(description="Whether the operation succeeded")
+    memories: list[MemoryResult] = Field(default_factory=list, description="List of memories")
+    error: str | None = Field(default=None, description="Error message if failed")
+
+
+def _trigger_anamnesis_reindex(user_name: str) -> None:
+    """Set the FolderIndexStatus for Anamnesis/<user> to 'pending'."""
+    from .services.anamnesis import _anamnesis_folder_path
+
+    folder = _anamnesis_folder_path(user_name)
+    engine = get_sync_engine()
+    with Session(engine) as db:
+        result = db.execute(
+            select(FolderIndexStatus).where(FolderIndexStatus.folder_path == folder)
+        )
+        status = result.scalar_one_or_none()
+        if status:
+            status.status = "pending"
+        else:
+            db.add(FolderIndexStatus(folder_path=folder, status="pending"))
+        db.commit()
+
+
+def _memory_to_result(data: dict) -> MemoryResult:
+    """Convert a parsed memory dict to a MemoryResult."""
+    return MemoryResult(
+        success=True,
+        memory_id=data.get("memory_id"),
+        content=data.get("content"),
+        created_at=data.get("created_at"),
+        modified_at=data.get("modified_at"),
+        likes=data.get("likes"),
+        dislikes=data.get("dislikes"),
+    )
+
+
+@mcp.tool()
+def create_memory(content: str) -> MemoryResult:
+    """Create a new memory note for the current user.
+
+    Args:
+        content: The text content of the memory
+
+    Returns:
+        The created memory with its UUID and metadata
+    """
+    from .services.anamnesis import read_memory, write_memory
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    memory_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    write_memory(user_name, memory_id, content, created_at=now, modified_at=now, likes=0, dislikes=0)
+    _trigger_anamnesis_reindex(user_name)
+
+    data = read_memory(user_name, memory_id)
+    return _memory_to_result(data)
+
+
+@mcp.tool()
+def get_memory(memory_id: str) -> MemoryResult:
+    """Get a specific memory by its UUID.
+
+    Args:
+        memory_id: The UUID of the memory
+
+    Returns:
+        The memory content and metadata
+    """
+    from .services.anamnesis import read_memory
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    try:
+        data = read_memory(user_name, memory_id)
+    except FileNotFoundError:
+        return MemoryResult(success=False, memory_id=memory_id, error="Memory not found")
+
+    return _memory_to_result(data)
+
+
+@mcp.tool()
+def update_memory(memory_id: str, content: str) -> MemoryResult:
+    """Update the content of an existing memory, preserving counters and created_at.
+
+    Args:
+        memory_id: The UUID of the memory to update
+        content: The new text content
+
+    Returns:
+        The updated memory
+    """
+    from .services.anamnesis import read_memory, write_memory
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    try:
+        existing = read_memory(user_name, memory_id)
+    except FileNotFoundError:
+        return MemoryResult(success=False, memory_id=memory_id, error="Memory not found")
+
+    now = datetime.now(timezone.utc)
+    write_memory(
+        user_name,
+        memory_id,
+        content,
+        created_at=datetime.fromisoformat(existing["created_at"]),
+        modified_at=now,
+        likes=existing["likes"],
+        dislikes=existing["dislikes"],
+    )
+    _trigger_anamnesis_reindex(user_name)
+
+    data = read_memory(user_name, memory_id)
+    return _memory_to_result(data)
+
+
+@mcp.tool()
+def delete_memory(memory_id: str) -> MemoryResult:
+    """Delete a memory and its indexed chunks.
+
+    Args:
+        memory_id: The UUID of the memory to delete
+
+    Returns:
+        Result indicating success or failure
+    """
+    from .services.anamnesis import _memory_rel_path, delete_memory_file
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    deleted = delete_memory_file(user_name, memory_id)
+    if not deleted:
+        return MemoryResult(success=False, memory_id=memory_id, error="Memory not found")
+
+    # Clean up Qdrant chunks and IndexedFile record
+    rel_path = _memory_rel_path(user_name, memory_id)
+    try:
+        vector_store = get_vector_store()
+        vector_store.delete_by_file(rel_path)
+    except Exception:
+        pass
+
+    engine = get_sync_engine()
+    with Session(engine) as db:
+        result = db.execute(
+            select(IndexedFile).where(IndexedFile.file_path == rel_path)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            db.delete(row)
+            db.commit()
+
+    _trigger_anamnesis_reindex(user_name)
+
+    return MemoryResult(success=True, memory_id=memory_id)
+
+
+@mcp.tool()
+def like_memory(memory_id: str) -> MemoryResult:
+    """Increment the like counter on a memory.
+
+    Args:
+        memory_id: The UUID of the memory to like
+
+    Returns:
+        The updated memory
+    """
+    from .services.anamnesis import read_memory, write_memory
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    try:
+        existing = read_memory(user_name, memory_id)
+    except FileNotFoundError:
+        return MemoryResult(success=False, memory_id=memory_id, error="Memory not found")
+
+    now = datetime.now(timezone.utc)
+    write_memory(
+        user_name,
+        memory_id,
+        existing["content"],
+        created_at=datetime.fromisoformat(existing["created_at"]),
+        modified_at=now,
+        likes=existing["likes"] + 1,
+        dislikes=existing["dislikes"],
+    )
+    _trigger_anamnesis_reindex(user_name)
+
+    data = read_memory(user_name, memory_id)
+    return _memory_to_result(data)
+
+
+@mcp.tool()
+def dislike_memory(memory_id: str) -> MemoryResult:
+    """Increment the dislike counter on a memory.
+
+    Args:
+        memory_id: The UUID of the memory to dislike
+
+    Returns:
+        The updated memory
+    """
+    from .services.anamnesis import read_memory, write_memory
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryResult(success=False, error="X-User-Name header required")
+
+    try:
+        existing = read_memory(user_name, memory_id)
+    except FileNotFoundError:
+        return MemoryResult(success=False, memory_id=memory_id, error="Memory not found")
+
+    now = datetime.now(timezone.utc)
+    write_memory(
+        user_name,
+        memory_id,
+        existing["content"],
+        created_at=datetime.fromisoformat(existing["created_at"]),
+        modified_at=now,
+        likes=existing["likes"],
+        dislikes=existing["dislikes"] + 1,
+    )
+    _trigger_anamnesis_reindex(user_name)
+
+    data = read_memory(user_name, memory_id)
+    return _memory_to_result(data)
+
+
+@mcp.tool()
+def list_memories() -> MemoryListResult:
+    """List all memories for the current user.
+
+    Returns:
+        List of all memories with their content and metadata
+    """
+    from .services.anamnesis import list_user_memories
+
+    user_name = _get_current_user_name()
+    if not user_name:
+        return MemoryListResult(success=False, error="X-User-Name header required")
+
+    memories = list_user_memories(user_name)
+    return MemoryListResult(
+        success=True,
+        memories=[_memory_to_result(m) for m in memories],
+    )
 
 
 def _merge_chunks_with_overlap(chunks: list, chunk_overlap: int) -> str:
