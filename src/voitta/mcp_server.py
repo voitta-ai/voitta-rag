@@ -139,6 +139,8 @@ class SearchResult(BaseModel):
     chunk_index: int = Field(description="Index of this chunk within the file")
     total_chunks: int = Field(description="Total number of chunks in the file")
     file_metadata: str | None = Field(description="User-added metadata/notes for the file")
+    source_created_at: str | None = Field(default=None, description="When the source file was originally created")
+    source_modified_at: str | None = Field(default=None, description="When the source file was last modified")
     memory_id: str | None = Field(default=None, description="Memory UUID if this result is from Anamnesis")
 
 
@@ -215,7 +217,12 @@ def search(
     date_end: str | None = None,
     date_field: str | None = None,
 ) -> list[SearchResult]:
-    """Search indexed documents using hybrid semantic + keyword similarity.
+    """Search indexed documents and user memories using hybrid semantic + keyword similarity.
+
+    This tool searches across all indexed content, including user memories (Anamnesis).
+    When a result originates from a memory, the `memory_id` field will be set to its UUID.
+    Use this tool to recall previously stored memories and find relevant information
+    from both documents and memories in a single query.
 
     Args:
         query: The search query text
@@ -228,7 +235,8 @@ def search(
         date_field: Which timestamp to filter on: "created" or "modified" (default: "modified")
 
     Returns:
-        List of matching document chunks with metadata and similarity scores
+        List of matching document chunks and memories with metadata and similarity scores.
+        Results from memories include a non-null `memory_id` field.
 
     """
     user_name = _get_current_user_name()
@@ -327,6 +335,12 @@ def search(
     # Build results
     results = []
     for chunk in chunks:
+        created = None
+        modified = None
+        if chunk.metadata.source_created_at:
+            created = datetime.fromtimestamp(chunk.metadata.source_created_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        if chunk.metadata.source_modified_at:
+            modified = datetime.fromtimestamp(chunk.metadata.source_modified_at, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
         results.append(
             SearchResult(
                 text=chunk.text,
@@ -338,6 +352,8 @@ def search(
                 chunk_index=chunk.metadata.chunk_index,
                 total_chunks=chunk.metadata.total_chunks,
                 file_metadata=file_metadata_map.get(chunk.metadata.file_path),
+                source_created_at=created,
+                source_modified_at=modified,
                 memory_id=_extract_memory_id(chunk.metadata.file_path),
             )
         )

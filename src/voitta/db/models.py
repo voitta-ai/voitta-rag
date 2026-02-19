@@ -148,6 +148,8 @@ class FolderSyncSource(Base):
     sp_site_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     sp_drive_id: Mapped[str | None] = mapped_column(String(500), nullable=True)
     sp_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sp_all_sites: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    sp_selected_sites: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array of {id, displayName, webUrl}
 
     # Google Drive credentials
     gd_service_account_json: Mapped[str | None] = mapped_column(Text, nullable=True)
