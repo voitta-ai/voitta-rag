@@ -26,9 +26,11 @@ class SharePointConfig(BaseModel):
     tenant_id: str
     client_id: str
     client_secret: str
-    site_url: str
+    site_url: str = ""
     drive_id: str = ""
     connected: bool = False
+    all_sites: bool = False
+    selected_sites: str = ""
 
 
 class GoogleDriveConfig(BaseModel):
@@ -138,6 +140,8 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
             site_url=source.sp_site_url or "",
             drive_id=source.sp_drive_id or "",
             connected=bool(source.sp_refresh_token),
+            all_sites=source.sp_all_sites or False,
+            selected_sites=source.sp_selected_sites or "",
         )
     elif source.source_type == "google_drive":
         gd = GoogleDriveConfig(
@@ -467,6 +471,34 @@ async def list_google_drive_folders(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/sharepoint/sites")
+async def list_sharepoint_sites(
+    folder_path: str = Query(...),
+    user: CurrentUser = None,
+    db: DB = None,
+):
+    """List all SharePoint sites accessible to the connected user."""
+    result = await db.execute(
+        select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
+    )
+    source = result.scalar_one_or_none()
+    if not source or source.source_type != "sharepoint":
+        raise HTTPException(status_code=404, detail="SharePoint source not found")
+    if not source.sp_refresh_token:
+        raise HTTPException(status_code=400, detail="SharePoint not connected yet")
+
+    from ...services.sync.sharepoint import list_sites
+
+    try:
+        sites = await list_sites(
+            source.sp_tenant_id, source.sp_client_id,
+            source.sp_client_secret, source.sp_refresh_token,
+        )
+        return {"sites": sites}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # --- CRUD + sync endpoints ---
 
 
@@ -585,6 +617,7 @@ async def upsert_sync_source(
     _oauth_tokens = {"sp_refresh_token", "ado_refresh_token", "box_refresh_token", "gd_refresh_token"}
     for field in (
         "sp_tenant_id", "sp_client_id", "sp_client_secret", "sp_site_url", "sp_drive_id",
+        "sp_all_sites", "sp_selected_sites",
         "gd_service_account_json", "gd_folder_id", "gd_client_id", "gd_client_secret",
         "gh_token", "gh_repo", "gh_branch", "gh_path",
         "gh_auth_method", "gh_username", "gh_pat", "gh_all_branches",
@@ -608,6 +641,8 @@ async def upsert_sync_source(
         source.sp_client_secret = request.sharepoint.client_secret
         source.sp_site_url = request.sharepoint.site_url
         source.sp_drive_id = request.sharepoint.drive_id
+        source.sp_all_sites = request.sharepoint.all_sites
+        source.sp_selected_sites = request.sharepoint.selected_sites or None
     elif request.source_type == "google_drive" and request.google_drive:
         source.gd_service_account_json = request.google_drive.service_account_json
         source.gd_client_id = request.google_drive.client_id

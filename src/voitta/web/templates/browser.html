@@ -175,14 +175,9 @@
                         <label class="form-label-compact">Client Secret</label>
                         <input type="text" id="sp-client-secret" class="sync-input" placeholder="Client secret">
                     </div>
-                    <div class="form-group-compact">
-                        <label class="form-label-compact">Site URL</label>
-                        <input type="text" id="sp-site-url" class="sync-input" placeholder="https://tenant.sharepoint.com/sites/MySite">
-                    </div>
-                    <div class="form-group-compact">
-                        <label class="form-label-compact">Drive ID</label>
-                        <input type="text" id="sp-drive-id" class="sync-input" placeholder="Optional (uses default doc library)">
-                    </div>
+                    <!-- Hidden legacy fields for backward compat -->
+                    <input type="hidden" id="sp-site-url">
+                    <input type="hidden" id="sp-drive-id">
                     <div class="sp-connect-row">
                         <button class="btn btn-secondary btn-sm" id="btn-sp-connect" onclick="connectSharePoint()">
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
@@ -193,6 +188,23 @@
                             Connect
                         </button>
                         <span class="sp-connect-status" id="sp-connect-status"></span>
+                    </div>
+                    <!-- Site selection (visible after OAuth connect) -->
+                    <div id="sp-sites-section" class="sp-sites-section" style="display: none;">
+                        <div class="sp-sites-header">
+                            <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer;">
+                                <input type="checkbox" id="sp-all-sites" onchange="toggleAllSites()">
+                                All sites
+                            </label>
+                            <button class="btn btn-text btn-sm" onclick="fetchSharePointSites()" title="Refresh site list">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                                    <path d="M23 4v6h-6"></path>
+                                    <path d="M1 20v-6h6"></path>
+                                    <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div id="sp-sites-list" class="sp-sites-list"></div>
                     </div>
                 </div>
 

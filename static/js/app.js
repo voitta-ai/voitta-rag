@@ -220,6 +220,10 @@ function handleSpConnectedEvent(event) {
     // Update UI if we're looking at this folder
     if (selectedPath === folderPath || currentPath === folderPath) {
         updateSpConnectStatus(true);
+        // Show sites section and fetch available sites
+        const sitesSection = document.getElementById('sp-sites-section');
+        if (sitesSection) sitesSection.style.display = 'block';
+        fetchSharePointSites();
         // Reload sync source to get updated data
         loadSyncSource(folderPath);
         showToast('SharePoint connected successfully', 'success');
@@ -994,6 +998,18 @@ function populateSyncFields(data) {
         document.getElementById('sp-site-url').value = data.sharepoint.site_url || '';
         document.getElementById('sp-drive-id').value = data.sharepoint.drive_id || '';
         updateSpConnectStatus(data.sharepoint.connected);
+        // Multi-site selection
+        const allSitesCb = document.getElementById('sp-all-sites');
+        if (allSitesCb) allSitesCb.checked = !!data.sharepoint.all_sites;
+        const sitesSection = document.getElementById('sp-sites-section');
+        if (sitesSection) {
+            if (data.sharepoint.connected) {
+                sitesSection.style.display = 'block';
+                fetchSharePointSites(data.sharepoint.selected_sites || '');
+            } else {
+                sitesSection.style.display = 'none';
+            }
+        }
     } else if (data.source_type === 'google_drive' && data.google_drive) {
         document.getElementById('gd-client-id').value = data.google_drive.client_id || '';
         document.getElementById('gd-client-secret').value = data.google_drive.client_secret || '';
@@ -1170,6 +1186,8 @@ function gatherSyncConfig() {
             client_secret: document.getElementById('sp-client-secret').value.trim(),
             site_url: document.getElementById('sp-site-url').value.trim(),
             drive_id: document.getElementById('sp-drive-id').value.trim(),
+            all_sites: document.getElementById('sp-all-sites')?.checked || false,
+            selected_sites: _getSelectedSitesJson(),
         };
     } else if (sourceType === 'google_drive') {
         config.google_drive = {
@@ -1469,6 +1487,83 @@ async function fetchGoogleDriveFolders(preselectFolder) {
     } finally {
         folderSelect.disabled = false;
     }
+}
+
+async function fetchSharePointSites(preselectSites) {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) return;
+
+    const listEl = document.getElementById('sp-sites-list');
+    if (!listEl) return;
+
+    listEl.innerHTML = '<span style="font-size:12px; color:var(--color-text-tertiary);">Loading sites...</span>';
+
+    try {
+        const resp = await fetch(`/api/sync/sharepoint/sites?folder_path=${encodeURIComponent(targetPath)}`);
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || resp.statusText);
+        }
+        const data = await resp.json();
+        const sites = data.sites || [];
+
+        // Parse preselected sites
+        let preselected = [];
+        if (preselectSites) {
+            try {
+                preselected = typeof preselectSites === 'string' ? JSON.parse(preselectSites) : preselectSites;
+            } catch (e) { preselected = []; }
+        }
+        const preselectedIds = new Set(preselected.map(s => s.id));
+
+        listEl.innerHTML = '';
+        if (sites.length === 0) {
+            listEl.innerHTML = '<span style="font-size:12px; color:var(--color-text-tertiary);">No sites found</span>';
+            return;
+        }
+
+        const allSitesChecked = document.getElementById('sp-all-sites')?.checked;
+
+        for (const site of sites) {
+            const label = document.createElement('label');
+            label.className = 'sp-site-item';
+
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.dataset.siteJson = JSON.stringify(site);
+            cb.checked = preselectedIds.has(site.id);
+            cb.disabled = allSitesChecked;
+
+            const text = document.createElement('span');
+            text.className = 'sp-site-name';
+            text.textContent = site.displayName || site.name;
+            text.title = site.webUrl || '';
+
+            label.appendChild(cb);
+            label.appendChild(text);
+            listEl.appendChild(label);
+        }
+    } catch (e) {
+        listEl.innerHTML = `<span style="font-size:12px; color:var(--color-error);">${escapeHtml(e.message)}</span>`;
+        console.warn('Failed to fetch SharePoint sites:', e.message);
+    }
+}
+
+function toggleAllSites() {
+    const checked = document.getElementById('sp-all-sites').checked;
+    document.querySelectorAll('#sp-sites-list input[type="checkbox"]').forEach(cb => {
+        cb.disabled = checked;
+    });
+}
+
+function _getSelectedSitesJson() {
+    const sites = [];
+    document.querySelectorAll('#sp-sites-list input[type="checkbox"]:checked').forEach(cb => {
+        try {
+            sites.push(JSON.parse(cb.dataset.siteJson));
+        } catch (e) {}
+    });
+    return JSON.stringify(sites);
 }
 
 async function connectSharePoint() {
