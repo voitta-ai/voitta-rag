@@ -156,7 +156,12 @@ function handleSyncStatusEvent(event) {
                 refreshFileList();
             }
         }
-        // Status is already reflected in the sidebar UI — no toast needed
+        // Show toast for sync completion or error
+        if (event.sync_status === 'error' && event.sync_error) {
+            showToast('Sync failed: ' + event.sync_error, 'error');
+        } else if (event.sync_status === 'synced') {
+            showToast('Sync completed for ' + folderPath, 'success');
+        }
     }
 }
 
@@ -900,12 +905,13 @@ function showToast(message, type = 'info') {
 
     container.appendChild(toast);
 
-    // Auto-remove after 4 seconds
+    // Auto-remove: 8 seconds for errors, 4 seconds for others
+    const duration = type === 'error' ? 8000 : 4000;
     setTimeout(() => {
         toast.style.opacity = '0';
         toast.style.transform = 'translateX(100%)';
         setTimeout(() => toast.remove(), 300);
-    }, 4000);
+    }, duration);
 }
 
 // ============================================
@@ -1037,11 +1043,25 @@ function populateSyncFields(data) {
     } else if (data.source_type === 'jira' && data.jira) {
         document.getElementById('jira-url').value = data.jira.url || '';
         document.getElementById('jira-project').value = data.jira.project || '';
-        document.getElementById('jira-token').value = data.jira.token || '';
+        document.getElementById('jira-auth-method').value = data.jira.auth_method || 'cloud';
+        document.getElementById('jira-email').value = data.jira.email || '';
+        if ((data.jira.auth_method || 'cloud') === 'cloud') {
+            document.getElementById('jira-token').value = data.jira.token || '';
+        } else {
+            document.getElementById('jira-token-server').value = data.jira.token || '';
+        }
+        toggleJiraAuth();
     } else if (data.source_type === 'confluence' && data.confluence) {
         document.getElementById('confluence-url').value = data.confluence.url || '';
         document.getElementById('confluence-space').value = data.confluence.space || '';
-        document.getElementById('confluence-token').value = data.confluence.token || '';
+        document.getElementById('confluence-auth-method').value = data.confluence.auth_method || 'cloud';
+        document.getElementById('confluence-email').value = data.confluence.email || '';
+        if ((data.confluence.auth_method || 'cloud') === 'cloud') {
+            document.getElementById('confluence-token').value = data.confluence.token || '';
+        } else {
+            document.getElementById('confluence-token-server').value = data.confluence.token || '';
+        }
+        toggleConfluenceAuth();
     } else if (data.source_type === 'box' && data.box) {
         document.getElementById('box-client-id').value = data.box.client_id || '';
         document.getElementById('box-client-secret').value = data.box.client_secret || '';
@@ -1105,8 +1125,13 @@ function updateSyncStatusDisplay(data) {
         'error': 'Error',
     };
     if (statusValue) {
-        statusValue.textContent = statusLabels[data.sync_status] || data.sync_status;
+        let label = statusLabels[data.sync_status] || data.sync_status;
+        if (data.sync_status === 'error' && data.sync_error) {
+            label = 'Error: ' + data.sync_error;
+        }
+        statusValue.textContent = label;
         statusValue.className = `sync-status-value sync-status-${data.sync_status}`;
+        statusValue.title = data.sync_error || '';
     }
 
     if (lastSynced) {
@@ -1196,16 +1221,28 @@ function gatherSyncConfig() {
             url: document.getElementById('ado-url').value.trim(),
         };
     } else if (sourceType === 'jira') {
+        const jiraMethod = document.getElementById('jira-auth-method').value;
+        const jiraToken = jiraMethod === 'cloud'
+            ? document.getElementById('jira-token').value.trim()
+            : document.getElementById('jira-token-server').value.trim();
         config.jira = {
             url: document.getElementById('jira-url').value.trim(),
             project: document.getElementById('jira-project').value.trim(),
-            token: document.getElementById('jira-token').value.trim(),
+            auth_method: jiraMethod,
+            email: document.getElementById('jira-email').value.trim(),
+            token: jiraToken,
         };
     } else if (sourceType === 'confluence') {
+        const confMethod = document.getElementById('confluence-auth-method').value;
+        const confToken = confMethod === 'cloud'
+            ? document.getElementById('confluence-token').value.trim()
+            : document.getElementById('confluence-token-server').value.trim();
         config.confluence = {
             url: document.getElementById('confluence-url').value.trim(),
             space: document.getElementById('confluence-space').value.trim(),
-            token: document.getElementById('confluence-token').value.trim(),
+            auth_method: confMethod,
+            email: document.getElementById('confluence-email').value.trim(),
+            token: confToken,
         };
     } else if (sourceType === 'box') {
         config.box = {
@@ -1326,6 +1363,18 @@ function toggleGhAuth() {
     const method = document.getElementById('gh-auth-method').value;
     document.getElementById('gh-ssh-fields').style.display = method === 'ssh' ? '' : 'none';
     document.getElementById('gh-token-fields').style.display = method === 'token' ? '' : 'none';
+}
+
+function toggleJiraAuth() {
+    const method = document.getElementById('jira-auth-method').value;
+    document.getElementById('jira-cloud-fields').style.display = method === 'cloud' ? '' : 'none';
+    document.getElementById('jira-server-fields').style.display = method === 'server' ? '' : 'none';
+}
+
+function toggleConfluenceAuth() {
+    const method = document.getElementById('confluence-auth-method').value;
+    document.getElementById('confluence-cloud-fields').style.display = method === 'cloud' ? '' : 'none';
+    document.getElementById('confluence-server-fields').style.display = method === 'server' ? '' : 'none';
 }
 
 function toggleAllBranches() {
