@@ -1,5 +1,6 @@
-"""Confluence sync connector - Pages from Confluence Server/Data Center."""
+"""Confluence sync connector - Pages from Confluence Cloud and Server/Data Center."""
 
+import base64
 import hashlib
 import json
 import logging
@@ -169,15 +170,33 @@ def _render_page_md(page: dict, attachments: list) -> str:
 
 class ConfluenceConnector(BaseSyncConnector):
 
-    def _headers(self, token: str) -> dict:
-        """Build auth headers for Confluence Server/DC with PAT."""
-        return {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+    def _is_cloud(self, source) -> bool:
+        retval = (source.confluence_auth_method or "cloud") == "cloud"
+        return retval
+
+    def _headers(self, source) -> dict:
+        """Build auth headers - Basic for Cloud, Bearer for Server/DC."""
+        if self._is_cloud(source):
+            credentials = f"{source.confluence_email}:{source.confluence_token}"
+            b64 = base64.b64encode(credentials.encode()).decode()
+            retval = {
+                "Authorization": f"Basic {b64}",
+                "Content-Type": "application/json",
+            }
+        else:
+            retval = {
+                "Authorization": f"Bearer {source.confluence_token}",
+                "Content-Type": "application/json",
+            }
+        return retval
 
     def _api_base(self, source) -> str:
-        return f"{source.confluence_url}/rest/api"
+        # Cloud uses /wiki/rest/api, Server uses /rest/api
+        if self._is_cloud(source):
+            retval = f"{source.confluence_url}/wiki/rest/api"
+        else:
+            retval = f"{source.confluence_url}/rest/api"
+        return retval
 
     async def _get_all_pages_in_space(self, client, headers, base_url, space_key) -> list[dict]:
         """Get all pages in a space with pagination."""
@@ -240,9 +259,11 @@ class ConfluenceConnector(BaseSyncConnector):
             raise RuntimeError("Confluence token not configured")
         if not source.confluence_space:
             raise RuntimeError("Confluence space not configured")
+        if self._is_cloud(source) and not source.confluence_email:
+            raise RuntimeError("Confluence Cloud requires an email address")
 
         files: list[RemoteFile] = []
-        headers = self._headers(source.confluence_token)
+        headers = self._headers(source)
         base = self._api_base(source)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -294,7 +315,7 @@ class ConfluenceConnector(BaseSyncConnector):
             raise RuntimeError(f"Cannot parse page ID from path: {remote_path}")
         page_id = m.group(1)
 
-        headers = self._headers(source.confluence_token)
+        headers = self._headers(source)
         base = self._api_base(source)
 
         async with httpx.AsyncClient(timeout=30.0) as client:

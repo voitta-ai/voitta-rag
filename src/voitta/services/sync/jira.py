@@ -1,5 +1,6 @@
-"""Jira sync connector - Issues, boards, and sprints from Jira Server/Data Center."""
+"""Jira sync connector - Issues, boards, and sprints from Jira Cloud and Server/Data Center."""
 
+import base64
 import hashlib
 import json
 import logging
@@ -325,12 +326,27 @@ def _render_issue_md(
 
 class JiraConnector(BaseSyncConnector):
 
-    def _headers(self, token: str) -> dict:
-        """Build auth headers for Jira Server/DC with PAT."""
-        return {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        }
+    def _is_cloud(self, source) -> bool:
+        retval = (source.jira_auth_method or "cloud") == "cloud"
+        return retval
+
+    def _headers(self, source) -> dict:
+        """Build auth headers - Basic for Cloud, Bearer for Server/DC."""
+        if self._is_cloud(source):
+            if not source.jira_email:
+                raise RuntimeError("Jira Cloud requires an email address. Re-save the sync config with your Atlassian email.")
+            credentials = f"{source.jira_email}:{source.jira_token}"
+            b64 = base64.b64encode(credentials.encode()).decode()
+            retval = {
+                "Authorization": f"Basic {b64}",
+                "Content-Type": "application/json",
+            }
+        else:
+            retval = {
+                "Authorization": f"Bearer {source.jira_token}",
+                "Content-Type": "application/json",
+            }
+        return retval
 
     def _api_base(self, source) -> str:
         return f"{source.jira_url}/rest/api/2"
@@ -342,7 +358,7 @@ class JiraConnector(BaseSyncConnector):
 
     async def _fetch_field_mapping(self, source) -> dict[str, str]:
         """Discover custom field IDs for sprint, story points, etc."""
-        headers = self._headers(source.jira_token)
+        headers = self._headers(source)
         base = self._api_base(source)
         mapping: dict[str, str] = {}
 
@@ -375,7 +391,7 @@ class JiraConnector(BaseSyncConnector):
 
     async def _sync_boards(self, source, local_root: Path) -> int:
         """Sync board and sprint data from the Agile API. Returns file count."""
-        headers = self._headers(source.jira_token)
+        headers = self._headers(source)
         agile = self._agile_base(source)
         count = 0
 
@@ -540,73 +556,118 @@ class JiraConnector(BaseSyncConnector):
             raise RuntimeError("Jira token not configured")
         if not source.jira_project:
             raise RuntimeError("Jira project not configured")
+        if self._is_cloud(source) and not source.jira_email:
+            raise RuntimeError("Jira Cloud requires an email address")
 
         files: list[RemoteFile] = []
-        headers = self._headers(source.jira_token)
-        base = self._api_base(source)
+        headers = self._headers(source)
+
+        is_cloud = self._is_cloud(source)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            start_at = 0
-            max_results = 100
-            total = None
+            jql = f"project = {source.jira_project} ORDER BY updated DESC"
 
-            while total is None or start_at < total:
-                # JQL to get all issues in project
-                jql = f"project = {source.jira_project} ORDER BY updated DESC"
-                resp = await client.get(
-                    f"{base}/search",
-                    params={
+            if is_cloud:
+                # Cloud: use v3 search/jql endpoint (v2/search is deprecated)
+                next_page_token = None
+                while True:
+                    params = {
                         "jql": jql,
-                        "startAt": start_at,
-                        "maxResults": max_results,
+                        "maxResults": 100,
                         "fields": "key,issuetype,summary,updated,created",
-                    },
-                    headers=headers,
-                )
+                    }
+                    if next_page_token:
+                        params["nextPageToken"] = next_page_token
 
-                if resp.status_code == 401:
-                    raise RuntimeError("Jira authentication failed. Check your token.")
-                if resp.status_code != 200:
-                    raise RuntimeError(
-                        f"Jira search failed ({resp.status_code}): {resp.text[:500]}"
+                    resp = await client.get(
+                        f"{source.jira_url}/rest/api/3/search/jql",
+                        params=params,
+                        headers=headers,
                     )
 
-                data = resp.json()
-                total = data.get("total", 0)
-                issues = data.get("issues", [])
-
-                for issue in issues:
-                    key = issue["key"]
-                    flds = issue.get("fields", {})
-                    issue_type = (flds.get("issuetype") or {}).get("name", "Other")
-                    summary = flds.get("summary", f"Issue-{key}")
-                    updated = flds.get("updated", "")
-
-                    safe_summary = _sanitize_filename(summary)
-                    safe_type = _sanitize_filename(issue_type)
-                    remote_path = f"issues/{safe_type}/{key}-{safe_summary}.md"
-
-                    # Use updated timestamp as content hash for change detection
-                    content_hash = hashlib.sha256(updated.encode()).hexdigest()
-
-                    created = flds.get("created", "")
-
-                    files.append(
-                        RemoteFile(
-                            remote_path=remote_path,
-                            size=0,
-                            modified_at=updated,
-                            content_hash=content_hash,
-                            created_at=created,
+                    if resp.status_code == 401:
+                        raise RuntimeError("Jira authentication failed. Check your email and API token.")
+                    if resp.status_code == 403:
+                        raise RuntimeError(
+                            f"Jira access denied. Verify your email and API token. ({resp.text[:300]})"
                         )
+                    if resp.status_code != 200:
+                        raise RuntimeError(
+                            f"Jira search failed ({resp.status_code}): {resp.text[:500]}"
+                        )
+
+                    data = resp.json()
+                    issues = data.get("issues", [])
+                    self._append_issues(files, issues, source)
+
+                    if data.get("isLast", True) or not issues:
+                        break
+                    next_page_token = data.get("nextPageToken")
+                    if not next_page_token:
+                        break
+            else:
+                # Server/DC: use v2 search endpoint
+                base = self._api_base(source)
+                start_at = 0
+                max_results = 100
+                total = None
+
+                while total is None or start_at < total:
+                    resp = await client.get(
+                        f"{base}/search",
+                        params={
+                            "jql": jql,
+                            "startAt": start_at,
+                            "maxResults": max_results,
+                            "fields": "key,issuetype,summary,updated,created",
+                        },
+                        headers=headers,
                     )
 
-                start_at += max_results
-                if not issues:
-                    break
+                    if resp.status_code == 401:
+                        raise RuntimeError("Jira authentication failed. Check your PAT token.")
+                    if resp.status_code != 200:
+                        raise RuntimeError(
+                            f"Jira search failed ({resp.status_code}): {resp.text[:500]}"
+                        )
+
+                    data = resp.json()
+                    total = data.get("total", 0)
+                    issues = data.get("issues", [])
+                    self._append_issues(files, issues, source)
+
+                    start_at += max_results
+                    if not issues:
+                        break
 
         logger.info("Listed %d issues from Jira project %s", len(files), source.jira_project)
         return files
+
+    def _append_issues(self, files: list[RemoteFile], issues: list[dict], source) -> None:
+        """Extract RemoteFile entries from a list of Jira issue dicts."""
+        for issue in issues:
+            key = issue["key"]
+            flds = issue.get("fields", {})
+            issue_type = (flds.get("issuetype") or {}).get("name", "Other")
+            summary = flds.get("summary", f"Issue-{key}")
+            updated = flds.get("updated", "")
+
+            safe_summary = _sanitize_filename(summary)
+            safe_type = _sanitize_filename(issue_type)
+            remote_path = f"issues/{safe_type}/{key}-{safe_summary}.md"
+
+            content_hash = hashlib.sha256(updated.encode()).hexdigest()
+            created = flds.get("created", "")
+
+            files.append(
+                RemoteFile(
+                    remote_path=remote_path,
+                    size=0,
+                    modified_at=updated,
+                    content_hash=content_hash,
+                    created_at=created,
+                )
+            )
 
     # ---- download_file ----------------------------------------------------
 
@@ -627,7 +688,7 @@ class JiraConnector(BaseSyncConnector):
             raise RuntimeError(f"Cannot parse issue path: {remote_path}")
 
         issue_key = match.group(1)
-        headers = self._headers(source.jira_token)
+        headers = self._headers(source)
         base = self._api_base(source)
 
         async with httpx.AsyncClient(timeout=30.0) as client:

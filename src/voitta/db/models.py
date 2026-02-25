@@ -179,11 +179,15 @@ class FolderSyncSource(Base):
     jira_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     jira_project: Mapped[str | None] = mapped_column(String(255), nullable=True)
     jira_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    jira_auth_method: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "cloud" or "server"
+    jira_email: Mapped[str | None] = mapped_column(String(255), nullable=True)  # For Cloud basic auth
 
     # Confluence credentials
     confluence_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     confluence_space: Mapped[str | None] = mapped_column(String(255), nullable=True)
     confluence_token: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    confluence_auth_method: Mapped[str | None] = mapped_column(String(20), nullable=True)  # "cloud" or "server"
+    confluence_email: Mapped[str | None] = mapped_column(String(255), nullable=True)  # For Cloud basic auth
 
     # Box credentials (OAuth 2.0)
     box_client_id: Mapped[str | None] = mapped_column(String(255), nullable=True)

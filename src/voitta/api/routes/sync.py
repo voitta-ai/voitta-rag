@@ -63,13 +63,17 @@ class AzureDevOpsConfig(BaseModel):
 class JiraConfig(BaseModel):
     url: str  # https://jira.example.com or https://jira.example.com/browse/PROJ
     project: str = ""  # Project key (e.g., PROJ)
-    token: str = ""  # Personal Access Token
+    token: str = ""  # Personal Access Token (Server/DC) or API Token (Cloud)
+    auth_method: str = "cloud"  # "cloud" or "server"
+    email: str = ""  # Atlassian account email (required for Cloud)
 
 
 class ConfluenceConfig(BaseModel):
     url: str  # https://confluence.example.com
     space: str = ""  # Space key (e.g., DAIHUB)
-    token: str = ""  # Personal Access Token
+    token: str = ""  # Personal Access Token (Server/DC) or API Token (Cloud)
+    auth_method: str = "cloud"  # "cloud" or "server"
+    email: str = ""  # Atlassian account email (required for Cloud)
 
 
 class BoxConfig(BaseModel):
@@ -173,12 +177,16 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
             url=source.jira_url or "",
             project=source.jira_project or "",
             token=source.jira_token or "",
+            auth_method=source.jira_auth_method or "cloud",
+            email=source.jira_email or "",
         )
     elif source.source_type == "confluence":
         confluence = ConfluenceConfig(
             url=source.confluence_url or "",
             space=source.confluence_space or "",
             token=source.confluence_token or "",
+            auth_method=source.confluence_auth_method or "cloud",
+            email=source.confluence_email or "",
         )
     elif source.source_type == "box":
         box = BoxConfig(
@@ -590,8 +598,8 @@ async def upsert_sync_source(
         "gh_auth_method", "gh_username", "gh_pat", "gh_all_branches",
         "ado_tenant_id", "ado_client_id", "ado_client_secret",
         "ado_organization", "ado_project", "ado_url",
-        "jira_url", "jira_project", "jira_token",
-        "confluence_url", "confluence_space", "confluence_token",
+        "jira_url", "jira_project", "jira_token", "jira_auth_method", "jira_email",
+        "confluence_url", "confluence_space", "confluence_token", "confluence_auth_method", "confluence_email",
         "box_client_id", "box_client_secret", "box_folder_id",
     ):
         setattr(source, field, None)
@@ -638,6 +646,8 @@ async def upsert_sync_source(
     elif request.source_type == "jira" and request.jira:
         from ...services.sync.jira import _parse_jira_url
         source.jira_token = request.jira.token
+        source.jira_auth_method = request.jira.auth_method or "cloud"
+        source.jira_email = request.jira.email
         # Try to parse URL for base URL and project
         try:
             base_url, project_key = _parse_jira_url(request.jira.url)
@@ -648,9 +658,15 @@ async def upsert_sync_source(
             source.jira_url = request.jira.url
             source.jira_project = request.jira.project
     elif request.source_type == "confluence" and request.confluence:
-        source.confluence_url = request.confluence.url.rstrip("/")
+        conf_url = request.confluence.url.rstrip("/")
+        # Strip /wiki suffix if user included it (Cloud adds it automatically)
+        if conf_url.endswith("/wiki"):
+            conf_url = conf_url[:-5]
+        source.confluence_url = conf_url
         source.confluence_space = request.confluence.space.upper()
         source.confluence_token = request.confluence.token
+        source.confluence_auth_method = request.confluence.auth_method or "cloud"
+        source.confluence_email = request.confluence.email
     elif request.source_type == "box" and request.box:
         source.box_client_id = request.box.client_id
         source.box_client_secret = request.box.client_secret
