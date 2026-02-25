@@ -1042,7 +1042,6 @@ function populateSyncFields(data) {
         updateAdoConnectStatus(data.azure_devops.connected);
     } else if (data.source_type === 'jira' && data.jira) {
         document.getElementById('jira-url').value = data.jira.url || '';
-        document.getElementById('jira-project').value = data.jira.project || '';
         document.getElementById('jira-auth-method').value = data.jira.auth_method || 'cloud';
         document.getElementById('jira-email').value = data.jira.email || '';
         if ((data.jira.auth_method || 'cloud') === 'cloud') {
@@ -1051,9 +1050,16 @@ function populateSyncFields(data) {
             document.getElementById('jira-token-server').value = data.jira.token || '';
         }
         toggleJiraAuth();
+        // Populate project multi-select
+        const savedProject = data.jira.project || '';
+        const projectKeys = savedProject === '*' ? ['*'] : savedProject.split(',').map(k => k.trim()).filter(Boolean);
+        if (savedProject && data.jira.url && data.jira.token) {
+            fetchJiraProjects(projectKeys);
+        } else {
+            msInit('jira-project', [], projectKeys);
+        }
     } else if (data.source_type === 'confluence' && data.confluence) {
         document.getElementById('confluence-url').value = data.confluence.url || '';
-        document.getElementById('confluence-space').value = data.confluence.space || '';
         document.getElementById('confluence-auth-method').value = data.confluence.auth_method || 'cloud';
         document.getElementById('confluence-email').value = data.confluence.email || '';
         if ((data.confluence.auth_method || 'cloud') === 'cloud') {
@@ -1062,6 +1068,14 @@ function populateSyncFields(data) {
             document.getElementById('confluence-token-server').value = data.confluence.token || '';
         }
         toggleConfluenceAuth();
+        // Populate space multi-select
+        const savedSpace = data.confluence.space || '';
+        const spaceKeys = savedSpace === '*' ? ['*'] : savedSpace.split(',').map(k => k.trim()).filter(Boolean);
+        if (savedSpace && data.confluence.url && data.confluence.token) {
+            fetchConfluenceSpaces(spaceKeys);
+        } else {
+            msInit('confluence-space', [], spaceKeys);
+        }
     } else if (data.source_type === 'box' && data.box) {
         document.getElementById('box-client-id').value = data.box.client_id || '';
         document.getElementById('box-client-secret').value = data.box.client_secret || '';
@@ -1069,10 +1083,21 @@ function populateSyncFields(data) {
         updateBoxConnectStatus(data.box.connected);
     }
 
+    // Re-enable all inputs for unlocked sources (clearSyncFields handles most,
+    // but selects need explicit re-enable in case prior folder was locked)
+    if (!locked) {
+        document.querySelectorAll('.sync-fields .sync-select').forEach(el => el.disabled = false);
+        document.querySelectorAll('.sync-input, .sync-textarea').forEach(el => el.disabled = false);
+        msSetDisabled('jira-project', false);
+        msSetDisabled('confluence-space', false);
+    }
+
     // Lock inputs and hide save/remove when folder has synced content
     // Keep the Connect/Reconnect button visible so users can re-consent to new scopes
     if (locked) {
         document.querySelectorAll('.sync-input, .sync-textarea, .sync-fields .sync-select').forEach(el => el.disabled = true);
+        msSetDisabled('jira-project', true);
+        msSetDisabled('confluence-space', true);
         const saveBtn = document.getElementById('btn-sync-save');
         const removeBtn = document.getElementById('btn-sync-remove');
         if (saveBtn) saveBtn.style.display = 'none';
@@ -1094,6 +1119,12 @@ function clearSyncFields() {
         el.value = '';
         el.disabled = false;
     });
+    document.querySelectorAll('.sync-fields .sync-select').forEach(el => {
+        el.disabled = false;
+    });
+    // Reset custom multi-select widgets
+    msReset('jira-project');
+    msReset('confluence-space');
     const actions = document.getElementById('sync-actions');
     if (actions) actions.style.display = 'none';
     const saveBtn = document.getElementById('btn-sync-save');
@@ -1227,7 +1258,7 @@ function gatherSyncConfig() {
             : document.getElementById('jira-token-server').value.trim();
         config.jira = {
             url: document.getElementById('jira-url').value.trim(),
-            project: document.getElementById('jira-project').value.trim(),
+            project: msGetValue('jira-project'),
             auth_method: jiraMethod,
             email: document.getElementById('jira-email').value.trim(),
             token: jiraToken,
@@ -1239,7 +1270,7 @@ function gatherSyncConfig() {
             : document.getElementById('confluence-token-server').value.trim();
         config.confluence = {
             url: document.getElementById('confluence-url').value.trim(),
-            space: document.getElementById('confluence-space').value.trim(),
+            space: msGetValue('confluence-space'),
             auth_method: confMethod,
             email: document.getElementById('confluence-email').value.trim(),
             token: confToken,
@@ -1517,6 +1548,255 @@ async function fetchGoogleDriveFolders(preselectFolder) {
         console.warn('Failed to fetch Google Drive folders:', e.message);
     } finally {
         folderSelect.disabled = false;
+    }
+}
+
+// ---- Custom multi-select checkbox dropdown ----
+
+// Internal state for multi-select widgets
+const _msState = {};
+
+function msInit(id, items, selectedValues) {
+    // items: [{value, label}, ...] -- always prepend ALL
+    _msState[id] = { items: items, selected: new Set(selectedValues || []) };
+    _msRender(id);
+}
+
+function _msRender(id) {
+    const dropdown = document.getElementById(id + '-dropdown');
+    const textEl = document.getElementById(id + '-text');
+    if (!dropdown || !textEl) return;
+
+    const state = _msState[id];
+    if (!state) return;
+
+    dropdown.innerHTML = '';
+    // Close dropdown when re-rendering
+    dropdown.classList.remove('open');
+
+    if (state.items.length === 0) {
+        // No items fetched yet — show hint in dropdown
+        const hint = document.createElement('div');
+        hint.className = 'ms-empty';
+        hint.textContent = 'Click "Fetch" to load options';
+        dropdown.appendChild(hint);
+    } else {
+        // ALL option
+        const allDiv = document.createElement('div');
+        allDiv.className = 'ms-option ms-all';
+        const allCb = document.createElement('input');
+        allCb.type = 'checkbox';
+        allCb.checked = state.selected.has('*');
+        allCb.onchange = () => _msToggleAll(id, allCb.checked);
+        const allLabel = document.createElement('span');
+        allLabel.textContent = '-- ALL --';
+        allDiv.appendChild(allCb);
+        allDiv.appendChild(allLabel);
+        dropdown.appendChild(allDiv);
+
+        // Individual items
+        const allSelected = state.selected.has('*');
+        state.items.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'ms-option' + (allSelected ? ' ms-disabled' : '');
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.checked = state.selected.has(item.value) || allSelected;
+            cb.disabled = allSelected;
+            cb.onchange = () => _msToggleItem(id, item.value, cb.checked);
+            const label = document.createElement('span');
+            label.textContent = item.label;
+            div.appendChild(cb);
+            div.appendChild(label);
+            dropdown.appendChild(div);
+        });
+    }
+
+    // Update display text
+    _msUpdateText(id);
+}
+
+function _msToggleAll(id, checked) {
+    const state = _msState[id];
+    if (!state) return;
+    if (checked) {
+        state.selected.clear();
+        state.selected.add('*');
+    } else {
+        state.selected.clear();
+    }
+    _msRender(id);
+}
+
+function _msToggleItem(id, value, checked) {
+    const state = _msState[id];
+    if (!state) return;
+    state.selected.delete('*');
+    if (checked) {
+        state.selected.add(value);
+    } else {
+        state.selected.delete(value);
+    }
+    // If all individual items are selected, switch to ALL
+    if (state.items.length > 0 && state.selected.size === state.items.length) {
+        state.selected.clear();
+        state.selected.add('*');
+    }
+    _msRender(id);
+}
+
+function _msUpdateText(id) {
+    const textEl = document.getElementById(id + '-text');
+    const state = _msState[id];
+    if (!textEl || !state) return;
+
+    if (state.selected.has('*')) {
+        textEl.textContent = 'All (syncs all current & future)';
+        textEl.classList.add('has-value');
+    } else if (state.selected.size === 0) {
+        if (state.items.length === 0) {
+            textEl.textContent = 'Click Fetch to load';
+        } else {
+            textEl.textContent = 'None selected';
+        }
+        textEl.classList.remove('has-value');
+    } else if (state.selected.size <= 3) {
+        textEl.textContent = Array.from(state.selected).join(', ');
+        textEl.classList.add('has-value');
+    } else {
+        textEl.textContent = state.selected.size + ' selected';
+        textEl.classList.add('has-value');
+    }
+}
+
+function msToggle(id) {
+    const dropdown = document.getElementById(id + '-dropdown');
+    if (!dropdown) return;
+    const isOpen = dropdown.classList.contains('open');
+    // Close all other dropdowns first
+    document.querySelectorAll('.ms-dropdown.open').forEach(d => d.classList.remove('open'));
+    if (!isOpen) {
+        dropdown.classList.add('open');
+    }
+}
+
+function msGetValue(id) {
+    const state = _msState[id];
+    if (!state) return '';
+    if (state.selected.has('*')) return '*';
+    return Array.from(state.selected).join(',');
+}
+
+function msSetValue(id, csvValue) {
+    const state = _msState[id];
+    if (!state) {
+        // State not yet initialized, just init with the value
+        _msState[id] = { items: [], selected: new Set() };
+    }
+    const s = _msState[id];
+    s.selected.clear();
+    if (!csvValue) return;
+    if (csvValue === '*') {
+        s.selected.add('*');
+    } else {
+        csvValue.split(',').forEach(k => {
+            const trimmed = k.trim();
+            if (trimmed) s.selected.add(trimmed);
+        });
+    }
+    _msRender(id);
+}
+
+function msReset(id) {
+    _msState[id] = { items: [], selected: new Set() };
+    const dropdown = document.getElementById(id + '-dropdown');
+    if (dropdown) {
+        dropdown.innerHTML = '';
+        dropdown.classList.remove('open');
+    }
+    const textEl = document.getElementById(id + '-text');
+    if (textEl) {
+        textEl.textContent = 'Click Fetch to load';
+        textEl.classList.remove('has-value');
+    }
+    msSetDisabled(id, false);
+}
+
+function msSetDisabled(id, disabled) {
+    const container = document.getElementById(id + '-container');
+    if (container) {
+        if (disabled) {
+            container.classList.add('disabled');
+        } else {
+            container.classList.remove('disabled');
+        }
+    }
+}
+
+// Close dropdowns when clicking outside
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('.ms-container')) {
+        document.querySelectorAll('.ms-dropdown.open').forEach(d => d.classList.remove('open'));
+    }
+});
+
+async function fetchJiraProjects(preselectValues) {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) return;
+
+    const savedValues = preselectValues || Array.from(_msState['jira-project']?.selected || []);
+    const textEl = document.getElementById('jira-project-text');
+    if (textEl) textEl.textContent = 'Loading...';
+    msSetDisabled('jira-project', true);
+
+    try {
+        const resp = await fetch(`/api/sync/jira/projects?folder_path=${encodeURIComponent(targetPath)}`);
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || resp.statusText);
+        }
+        const data = await resp.json();
+        const projects = data.projects || [];
+
+        const items = projects.map(p => ({ value: p.key, label: `${p.key} - ${p.name}` }));
+        msInit('jira-project', items, savedValues);
+        showToast(`Found ${projects.length} project(s)`, 'success');
+    } catch (e) {
+        msInit('jira-project', [], savedValues);
+        showToast('Failed to fetch projects: ' + e.message, 'error');
+        console.warn('Failed to fetch Jira projects:', e.message);
+    } finally {
+        msSetDisabled('jira-project', false);
+    }
+}
+
+async function fetchConfluenceSpaces(preselectValues) {
+    const targetPath = selectedPath || currentPath;
+    if (!targetPath) return;
+
+    const savedValues = preselectValues || Array.from(_msState['confluence-space']?.selected || []);
+    const textEl = document.getElementById('confluence-space-text');
+    if (textEl) textEl.textContent = 'Loading...';
+    msSetDisabled('confluence-space', true);
+
+    try {
+        const resp = await fetch(`/api/sync/confluence/spaces?folder_path=${encodeURIComponent(targetPath)}`);
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || resp.statusText);
+        }
+        const data = await resp.json();
+        const spaces = data.spaces || [];
+
+        const items = spaces.map(s => ({ value: s.key, label: `${s.key} - ${s.name}` }));
+        msInit('confluence-space', items, savedValues);
+        showToast(`Found ${spaces.length} space(s)`, 'success');
+    } catch (e) {
+        msInit('confluence-space', [], savedValues);
+        showToast('Failed to fetch spaces: ' + e.message, 'error');
+        console.warn('Failed to fetch Confluence spaces:', e.message);
+    } finally {
+        msSetDisabled('confluence-space', false);
     }
 }
 

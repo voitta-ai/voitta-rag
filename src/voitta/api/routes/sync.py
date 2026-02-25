@@ -475,6 +475,59 @@ async def list_google_drive_folders(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# --- Atlassian project / space listing ---
+
+
+@router.get("/jira/projects")
+async def list_jira_projects(
+    folder_path: str = Query(...),
+    user: CurrentUser = None,
+    db: DB = None,
+):
+    """List Jira projects accessible with stored credentials."""
+    result = await db.execute(
+        select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
+    )
+    source = result.scalar_one_or_none()
+    if not source or source.source_type != "jira":
+        raise HTTPException(status_code=404, detail="Jira source not found")
+    if not source.jira_token:
+        raise HTTPException(status_code=400, detail="Save Jira credentials first")
+
+    from ...services.sync.jira import list_projects
+
+    try:
+        projects = await list_projects(source)
+        return {"projects": projects}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/confluence/spaces")
+async def list_confluence_spaces(
+    folder_path: str = Query(...),
+    user: CurrentUser = None,
+    db: DB = None,
+):
+    """List Confluence spaces accessible with stored credentials."""
+    result = await db.execute(
+        select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
+    )
+    source = result.scalar_one_or_none()
+    if not source or source.source_type != "confluence":
+        raise HTTPException(status_code=404, detail="Confluence source not found")
+    if not source.confluence_token:
+        raise HTTPException(status_code=400, detail="Save Confluence credentials first")
+
+    from ...services.sync.confluence import list_spaces
+
+    try:
+        spaces = await list_spaces(source)
+        return {"spaces": spaces}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # --- CRUD + sync endpoints ---
 
 
@@ -652,18 +705,31 @@ async def upsert_sync_source(
         try:
             base_url, project_key = _parse_jira_url(request.jira.url)
             source.jira_url = base_url
-            # Use parsed project if no explicit project provided
-            source.jira_project = request.jira.project or project_key
         except ValueError:
             source.jira_url = request.jira.url
-            source.jira_project = request.jira.project
+            project_key = ""
+        # Normalize project value: "*" for ALL, or uppercase comma-separated keys
+        project_raw = (request.jira.project or project_key).strip()
+        if project_raw == "*":
+            source.jira_project = "*"
+        else:
+            source.jira_project = ",".join(
+                k.strip().upper() for k in project_raw.split(",") if k.strip()
+            )
     elif request.source_type == "confluence" and request.confluence:
         conf_url = request.confluence.url.rstrip("/")
         # Strip /wiki suffix if user included it (Cloud adds it automatically)
         if conf_url.endswith("/wiki"):
             conf_url = conf_url[:-5]
         source.confluence_url = conf_url
-        source.confluence_space = request.confluence.space.upper()
+        # Normalize space value: "*" for ALL, or uppercase comma-separated keys
+        space_raw = request.confluence.space.strip()
+        if space_raw == "*":
+            source.confluence_space = "*"
+        else:
+            source.confluence_space = ",".join(
+                k.strip().upper() for k in space_raw.split(",") if k.strip()
+            )
         source.confluence_token = request.confluence.token
         source.confluence_auth_method = request.confluence.auth_method or "cloud"
         source.confluence_email = request.confluence.email

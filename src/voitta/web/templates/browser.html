@@ -318,8 +318,15 @@
                         <input type="text" id="jira-url" class="sync-input" placeholder="https://yourorg.atlassian.net">
                     </div>
                     <div class="form-group-compact">
-                        <label class="form-label-compact">Project Key</label>
-                        <input type="text" id="jira-project" class="sync-input" placeholder="PROJ">
+                        <label class="form-label-compact">Project(s)</label>
+                        <div class="ms-container" id="jira-project-container">
+                            <div class="ms-display" onclick="msToggle('jira-project')">
+                                <span class="ms-text" id="jira-project-text">Select projects...</span>
+                                <span class="ms-arrow">&#9662;</span>
+                            </div>
+                            <div class="ms-dropdown" id="jira-project-dropdown"></div>
+                        </div>
+                        <button type="button" class="btn btn-text btn-sm" id="btn-jira-fetch-projects" onclick="fetchJiraProjects()" title="Fetch projects from Jira" style="margin-top:2px; font-size:11px;">Fetch Projects</button>
                     </div>
                     <div class="form-group-compact">
                         <label class="form-label-compact">Auth Method</label>
@@ -353,8 +360,15 @@
                         <input type="text" id="confluence-url" class="sync-input" placeholder="https://yourorg.atlassian.net (no /wiki)">
                     </div>
                     <div class="form-group-compact">
-                        <label class="form-label-compact">Space Key</label>
-                        <input type="text" id="confluence-space" class="sync-input" placeholder="DAIHUB">
+                        <label class="form-label-compact">Space(s)</label>
+                        <div class="ms-container" id="confluence-space-container">
+                            <div class="ms-display" onclick="msToggle('confluence-space')">
+                                <span class="ms-text" id="confluence-space-text">Select spaces...</span>
+                                <span class="ms-arrow">&#9662;</span>
+                            </div>
+                            <div class="ms-dropdown" id="confluence-space-dropdown"></div>
+                        </div>
+                        <button type="button" class="btn btn-text btn-sm" id="btn-confluence-fetch-spaces" onclick="fetchConfluenceSpaces()" title="Fetch spaces from Confluence" style="margin-top:2px; font-size:11px;">Fetch Spaces</button>
                     </div>
                     <div class="form-group-compact">
                         <label class="form-label-compact">Auth Method</label>

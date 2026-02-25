@@ -320,6 +320,67 @@ def _render_issue_md(
 
 
 # ---------------------------------------------------------------------------
+# Module-level helpers for API routes
+# ---------------------------------------------------------------------------
+
+
+async def list_projects(source) -> list[dict]:
+    """List Jira projects accessible with the stored credentials.
+
+    Returns a list of dicts with 'key' and 'name' fields.
+    """
+    is_cloud = (source.jira_auth_method or "cloud") == "cloud"
+
+    if is_cloud:
+        if not source.jira_email:
+            raise RuntimeError("Jira Cloud requires an email address")
+        credentials = f"{source.jira_email}:{source.jira_token}"
+        b64 = base64.b64encode(credentials.encode()).decode()
+        headers = {"Authorization": f"Basic {b64}", "Content-Type": "application/json"}
+    else:
+        headers = {"Authorization": f"Bearer {source.jira_token}", "Content-Type": "application/json"}
+
+    base_url = source.jira_url
+
+    projects = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        if is_cloud:
+            # Cloud: paginated project search via v3
+            start_at = 0
+            while True:
+                resp = await client.get(
+                    f"{base_url}/rest/api/3/project/search",
+                    params={"startAt": start_at, "maxResults": 50},
+                    headers=headers,
+                )
+                if resp.status_code == 401:
+                    raise RuntimeError("Jira authentication failed. Check your email and API token.")
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Failed to list projects ({resp.status_code}): {resp.text[:300]}")
+                data = resp.json()
+                for p in data.get("values", []):
+                    projects.append({"key": p["key"], "name": p.get("name", p["key"])})
+                if data.get("isLast", True):
+                    break
+                start_at += len(data.get("values", []))
+        else:
+            # Server/DC: simple list via v2
+            resp = await client.get(
+                f"{base_url}/rest/api/2/project",
+                headers=headers,
+            )
+            if resp.status_code == 401:
+                raise RuntimeError("Jira authentication failed. Check your PAT.")
+            if resp.status_code != 200:
+                raise RuntimeError(f"Failed to list projects ({resp.status_code}): {resp.text[:300]}")
+            for p in resp.json():
+                projects.append({"key": p["key"], "name": p.get("name", p["key"])})
+
+    projects.sort(key=lambda p: p["key"])
+    return projects
+
+
+# ---------------------------------------------------------------------------
 # Connector
 # ---------------------------------------------------------------------------
 
@@ -397,10 +458,14 @@ class JiraConnector(BaseSyncConnector):
 
         try:
             async with httpx.AsyncClient(timeout=60.0) as client:
-                # List boards for the project
+                # List boards for the project(s)
+                board_params = {"maxResults": 50}
+                project_val = (source.jira_project or "").strip()
+                if project_val and project_val != "*" and "," not in project_val:
+                    board_params["projectKeyOrId"] = project_val
                 boards_resp = await client.get(
                     f"{agile}/board",
-                    params={"projectKeyOrId": source.jira_project, "maxResults": 50},
+                    params=board_params,
                     headers=headers,
                 )
                 if boards_resp.status_code != 200:
@@ -565,7 +630,20 @@ class JiraConnector(BaseSyncConnector):
         is_cloud = self._is_cloud(source)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            jql = f"project = {source.jira_project} ORDER BY updated DESC"
+            project_val = source.jira_project.strip()
+            if project_val == "*":
+                all_projects = await list_projects(source)
+                all_keys = [p["key"] for p in all_projects]
+                if not all_keys:
+                    raise RuntimeError("No Jira projects found")
+                quoted = ', '.join(f'"{k}"' for k in all_keys)
+                jql = f"project IN ({quoted}) ORDER BY updated DESC"
+            elif "," in project_val:
+                keys = [k.strip() for k in project_val.split(",") if k.strip()]
+                quoted = ', '.join(f'"{k}"' for k in keys)
+                jql = f"project IN ({quoted}) ORDER BY updated DESC"
+            else:
+                jql = f'project = "{project_val}" ORDER BY updated DESC'
 
             if is_cloud:
                 # Cloud: use v3 search/jql endpoint (v2/search is deprecated)
