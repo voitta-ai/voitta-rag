@@ -1295,6 +1295,115 @@ a:hover {
     border-color: var(--color-accent);
 }
 
+/* Custom multi-select dropdown */
+.ms-container {
+    position: relative;
+    width: 100%;
+}
+
+.ms-display {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-family: inherit;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    user-select: none;
+    min-height: 28px;
+    box-sizing: border-box;
+}
+
+.ms-display:hover {
+    border-color: var(--color-accent);
+}
+
+.ms-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+}
+
+.ms-text.has-value {
+    color: var(--color-text-primary);
+}
+
+.ms-arrow {
+    font-size: 10px;
+    color: var(--color-text-tertiary);
+    margin-left: 4px;
+    flex-shrink: 0;
+}
+
+.ms-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    max-height: 180px;
+    overflow-y: auto;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-accent);
+    border-top: none;
+    border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.ms-dropdown.open {
+    display: block;
+}
+
+.ms-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+    user-select: none;
+}
+
+.ms-option:hover {
+    background: var(--color-bg-hover);
+}
+
+.ms-option input[type="checkbox"] {
+    margin: 0;
+    flex-shrink: 0;
+}
+
+.ms-option.ms-all {
+    border-bottom: 1px solid var(--color-border);
+    font-weight: var(--font-weight-medium);
+}
+
+.ms-option.ms-disabled {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.ms-empty {
+    padding: 6px 8px;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+    font-style: italic;
+}
+
+.ms-container.disabled .ms-display {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
 .sync-fields {
     display: flex;
     flex-direction: column;

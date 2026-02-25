@@ -13,13 +13,13 @@ Useful for teams and individuals who want to:
 
 - File browser with real-time updates
 - Folder creation and file upload
-- Git repository sync and indexing
-- Google Drive integration
-- Jira board sync
+- Remote sync connectors: Git, Google Drive, SharePoint, Azure DevOps, Jira, Confluence, Box
+- Jira/Confluence support for both Cloud and Server/Data Center deployments
 - Per-user folder enable/disable for indexing
 - Automatic document indexing (DOCX, PPTX, XLSX, ODT, ODP, ODS)
-- Vector search with Qdrant
+- Vector search with Qdrant (hybrid semantic + keyword, with time range filtering)
 - MCP server for Claude Code integration
+- Anamnesis: persistent RAG memory for AI assistants (create, retrieve, like/dislike memories)
 - File change detection via content hashing
 - Global file/folder metadata
 - Dark/light theme support
@@ -170,13 +170,20 @@ Add to `~/.claude.json` under `mcpServers` (global) or in your project settings:
 
 | Tool | Description |
 |------|-------------|
-| **`search`** | Hybrid semantic + keyword search across indexed documents |
+| **`search`** | Hybrid semantic + keyword search across indexed documents. Supports `date_start`/`date_end` for time range filtering. |
 | **`list_indexed_folders`** | List all indexed folders with status, file counts, and metadata |
 | **`get_file`** | Get full content of an indexed file |
 | **`get_chunk_range`** | Get a range of chunks from a file, merged with overlaps removed |
 | **`get_file_uri`** | Get a download URI for a file (for use with wget/curl) |
 | **`set_folder_active`** | Set folder visibility for search (requires `X-User-Name` header) |
 | **`get_folder_active_states`** | Get active/inactive state of all folders for current user |
+| **`create_memory`** | Create a persistent memory entry (Anamnesis) |
+| **`get_memory`** | Retrieve a specific memory by ID |
+| **`update_memory`** | Update content of an existing memory |
+| **`delete_memory`** | Delete a memory entry |
+| **`like_memory`** | Upvote a memory (increases relevance) |
+| **`dislike_memory`** | Downvote a memory (decreases relevance) |
+| **`list_memories`** | List all stored memories |
 
 ## Bulk Repository Import
 

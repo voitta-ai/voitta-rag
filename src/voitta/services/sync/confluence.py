@@ -164,6 +164,54 @@ def _render_page_md(page: dict, attachments: list) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Module-level helpers for API routes
+# ---------------------------------------------------------------------------
+
+
+async def list_spaces(source) -> list[dict]:
+    """List Confluence spaces accessible with the stored credentials.
+
+    Returns a list of dicts with 'key' and 'name' fields.
+    """
+    is_cloud = (source.confluence_auth_method or "cloud") == "cloud"
+
+    if is_cloud:
+        if not source.confluence_email:
+            raise RuntimeError("Confluence Cloud requires an email address")
+        credentials = f"{source.confluence_email}:{source.confluence_token}"
+        b64 = base64.b64encode(credentials.encode()).decode()
+        headers = {"Authorization": f"Basic {b64}", "Content-Type": "application/json"}
+        api_base = f"{source.confluence_url}/wiki/rest/api"
+    else:
+        headers = {"Authorization": f"Bearer {source.confluence_token}", "Content-Type": "application/json"}
+        api_base = f"{source.confluence_url}/rest/api"
+
+    spaces = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        start = 0
+        limit = 50
+        while True:
+            resp = await client.get(
+                f"{api_base}/space",
+                params={"start": start, "limit": limit, "type": "global"},
+                headers=headers,
+            )
+            if resp.status_code == 401:
+                raise RuntimeError("Confluence authentication failed. Check your credentials.")
+            if resp.status_code != 200:
+                raise RuntimeError(f"Failed to list spaces ({resp.status_code}): {resp.text[:300]}")
+            data = resp.json()
+            for s in data.get("results", []):
+                spaces.append({"key": s["key"], "name": s.get("name", s["key"])})
+            if len(data.get("results", [])) < limit:
+                break
+            start += limit
+
+    spaces.sort(key=lambda s: s["key"])
+    return spaces
+
+
+# ---------------------------------------------------------------------------
 # Connector
 # ---------------------------------------------------------------------------
 
@@ -254,6 +302,22 @@ class ConfluenceConnector(BaseSyncConnector):
 
     # ---- list_files -------------------------------------------------------
 
+    async def _resolve_space_keys(self, source) -> list[str]:
+        """Resolve the configured space value into a list of space keys."""
+        space_val = (source.confluence_space or "").strip()
+        if not space_val:
+            raise RuntimeError("Confluence space not configured")
+        if space_val == "*":
+            # Fetch all spaces
+            all_spaces = await list_spaces(source)
+            retval = [s["key"] for s in all_spaces]
+            return retval
+        if "," in space_val:
+            retval = [k.strip() for k in space_val.split(",") if k.strip()]
+            return retval
+        retval = [space_val]
+        return retval
+
     async def list_files(self, source) -> list[RemoteFile]:
         if not source.confluence_token:
             raise RuntimeError("Confluence token not configured")
@@ -262,44 +326,52 @@ class ConfluenceConnector(BaseSyncConnector):
         if self._is_cloud(source) and not source.confluence_email:
             raise RuntimeError("Confluence Cloud requires an email address")
 
+        space_keys = await self._resolve_space_keys(source)
+
         files: list[RemoteFile] = []
         headers = self._headers(source)
         base = self._api_base(source)
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            pages = await self._get_all_pages_in_space(
-                client, headers, base, source.confluence_space
-            )
-
-            # Build map for path resolution
-            page_map = {p["id"]: p for p in pages}
-
-            for page in pages:
-                page_id = page["id"]
-                version = page.get("version", {}).get("number", 1)
-                updated = page.get("version", {}).get("when", "")
-
-                remote_path = f"pages/{self._build_page_path(page, page_map)}"
-
-                # Use version number as content hash for change detection
-                content_hash = hashlib.sha256(f"{version}:{updated}".encode()).hexdigest()
-
-                created_date = page.get("history", {}).get("createdDate", "")
-
-                files.append(
-                    RemoteFile(
-                        remote_path=remote_path,
-                        size=0,
-                        modified_at=updated,
-                        content_hash=content_hash,
-                        created_at=created_date,
-                    )
+            for space_key in space_keys:
+                pages = await self._get_all_pages_in_space(
+                    client, headers, base, space_key
                 )
 
-        logger.info(
-            "Listed %d pages from Confluence space %s",
-            len(files), source.confluence_space
-        )
+                # Build map for path resolution
+                page_map = {p["id"]: p for p in pages}
+
+                # Prefix with space key when syncing multiple spaces
+                prefix = f"{space_key}/" if len(space_keys) > 1 else ""
+
+                for page in pages:
+                    page_id = page["id"]
+                    version = page.get("version", {}).get("number", 1)
+                    updated = page.get("version", {}).get("when", "")
+
+                    remote_path = f"pages/{prefix}{self._build_page_path(page, page_map)}"
+
+                    # Use version number as content hash for change detection
+                    content_hash = hashlib.sha256(f"{version}:{updated}".encode()).hexdigest()
+
+                    created_date = page.get("history", {}).get("createdDate", "")
+
+                    files.append(
+                        RemoteFile(
+                            remote_path=remote_path,
+                            size=0,
+                            modified_at=updated,
+                            content_hash=content_hash,
+                            created_at=created_date,
+                        )
+                    )
+
+                logger.info(
+                    "Listed %d pages from Confluence space %s",
+                    len(files), space_key
+                )
+
+        logger.info("Listed %d total pages from %d Confluence space(s)", len(files), len(space_keys))
         return files
 
     # ---- download_file ----------------------------------------------------
