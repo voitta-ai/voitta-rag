@@ -1081,6 +1081,15 @@ function populateSyncFields(data) {
         document.getElementById('box-client-secret').value = data.box.client_secret || '';
         document.getElementById('box-folder-id').value = data.box.folder_id || '';
         updateBoxConnectStatus(data.box.connected);
+    } else if (data.source_type === 'glue_catalog' && data.glue_catalog) {
+        document.getElementById('glue-region').value = data.glue_catalog.region || '';
+        document.getElementById('glue-auth-method').value = data.glue_catalog.auth_method || 'profile';
+        document.getElementById('glue-profile').value = data.glue_catalog.profile || '';
+        document.getElementById('glue-access-key-id').value = data.glue_catalog.access_key_id || '';
+        document.getElementById('glue-secret-access-key').value = data.glue_catalog.secret_access_key || '';
+        document.getElementById('glue-catalog-id').value = data.glue_catalog.catalog_id || '';
+        document.getElementById('glue-databases').value = data.glue_catalog.databases || '';
+        toggleGlueAuth();
     }
 
     // Re-enable all inputs for unlocked sources (clearSyncFields handles most,
@@ -1281,6 +1290,17 @@ function gatherSyncConfig() {
             client_secret: document.getElementById('box-client-secret').value.trim(),
             folder_id: document.getElementById('box-folder-id').value.trim(),
         };
+    } else if (sourceType === 'glue_catalog') {
+        const glueMethod = document.getElementById('glue-auth-method').value;
+        config.glue_catalog = {
+            region: document.getElementById('glue-region').value,
+            auth_method: glueMethod,
+            profile: document.getElementById('glue-profile').value.trim(),
+            access_key_id: document.getElementById('glue-access-key-id').value.trim(),
+            secret_access_key: document.getElementById('glue-secret-access-key').value.trim(),
+            catalog_id: document.getElementById('glue-catalog-id').value.trim(),
+            databases: document.getElementById('glue-databases').value.trim(),
+        };
     }
 
     return config;
@@ -1406,6 +1426,21 @@ function toggleConfluenceAuth() {
     const method = document.getElementById('confluence-auth-method').value;
     document.getElementById('confluence-cloud-fields').style.display = method === 'cloud' ? '' : 'none';
     document.getElementById('confluence-server-fields').style.display = method === 'server' ? '' : 'none';
+}
+
+function toggleGlueAuth() {
+    const method = document.getElementById('glue-auth-method').value;
+    document.getElementById('glue-profile-fields').style.display = method === 'profile' ? '' : 'none';
+    document.getElementById('glue-keys-fields').style.display = method === 'keys' ? '' : 'none';
+}
+
+function showGlueHelp() {
+    showToast(
+        'Indexes schema metadata (databases, tables, columns) from AWS Glue Data Catalog. ' +
+        'Use "Profile" for local dev (~/.aws/credentials) or "Access Keys" for Docker deployments. ' +
+        'Leave Databases empty or use * for all databases, or list specific ones separated by commas.',
+        'info',
+    );
 }
 
 function toggleAllBranches() {

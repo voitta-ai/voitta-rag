@@ -195,6 +195,14 @@ class FolderSyncSource(Base):
     box_folder_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     box_refresh_token: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # AWS Glue Catalog
+    glue_region: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    glue_profile: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    glue_access_key_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    glue_secret_access_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    glue_catalog_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    glue_databases: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
     # Sync status tracking
     sync_status: Mapped[str] = mapped_column(String(20), default="idle")
     sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)

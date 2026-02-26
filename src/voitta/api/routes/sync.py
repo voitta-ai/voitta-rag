@@ -83,6 +83,16 @@ class BoxConfig(BaseModel):
     connected: bool = False
 
 
+class GlueCatalogConfig(BaseModel):
+    region: str = ""
+    auth_method: str = "profile"  # "profile" or "keys"
+    profile: str = ""
+    access_key_id: str = ""
+    secret_access_key: str = ""
+    catalog_id: str = ""
+    databases: str = ""  # comma-separated or "*" for all
+
+
 class UpsertSyncSourceRequest(BaseModel):
     source_type: str
     sharepoint: SharePointConfig | None = None
@@ -92,6 +102,7 @@ class UpsertSyncSourceRequest(BaseModel):
     jira: JiraConfig | None = None
     confluence: ConfluenceConfig | None = None
     box: BoxConfig | None = None
+    glue_catalog: GlueCatalogConfig | None = None
 
 
 class SyncSourceResponse(BaseModel):
@@ -107,6 +118,7 @@ class SyncSourceResponse(BaseModel):
     jira: JiraConfig | None = None
     confluence: ConfluenceConfig | None = None
     box: BoxConfig | None = None
+    glue_catalog: GlueCatalogConfig | None = None
 
 
 class SyncStatusResponse(BaseModel):
@@ -195,6 +207,17 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
             folder_id=source.box_folder_id or "",
             connected=bool(source.box_refresh_token),
         )
+    elif source.source_type == "glue_catalog":
+        auth_method = "keys" if source.glue_access_key_id else "profile"
+        glue_catalog = GlueCatalogConfig(
+            region=source.glue_region or "",
+            auth_method=auth_method,
+            profile=source.glue_profile or "",
+            access_key_id=source.glue_access_key_id or "",
+            secret_access_key=source.glue_secret_access_key or "",
+            catalog_id=source.glue_catalog_id or "",
+            databases=source.glue_databases or "",
+        )
 
     return SyncSourceResponse(
         folder_path=source.folder_path,
@@ -209,6 +232,7 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
         jira=jira,
         confluence=confluence,
         box=box,
+        glue_catalog=glue_catalog if source.source_type == "glue_catalog" else None,
     )
 
 
@@ -626,7 +650,7 @@ async def upsert_sync_source(
             detail="Sync can only be configured on empty folders",
         )
 
-    if request.source_type not in ("sharepoint", "google_drive", "github", "azure_devops", "jira", "confluence", "box"):
+    if request.source_type not in ("sharepoint", "google_drive", "github", "azure_devops", "jira", "confluence", "box", "glue_catalog"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown source type: {request.source_type}",
@@ -654,6 +678,8 @@ async def upsert_sync_source(
         "jira_url", "jira_project", "jira_token", "jira_auth_method", "jira_email",
         "confluence_url", "confluence_space", "confluence_token", "confluence_auth_method", "confluence_email",
         "box_client_id", "box_client_secret", "box_folder_id",
+        "glue_region", "glue_profile", "glue_access_key_id", "glue_secret_access_key",
+        "glue_catalog_id", "glue_databases",
     ):
         setattr(source, field, None)
     # Clear OAuth tokens only when source type changes (they are set by the
@@ -745,6 +771,18 @@ async def upsert_sync_source(
             if m:
                 folder_id = m.group(1)
         source.box_folder_id = folder_id
+    elif request.source_type == "glue_catalog" and request.glue_catalog:
+        source.glue_region = request.glue_catalog.region
+        source.glue_catalog_id = request.glue_catalog.catalog_id or None
+        source.glue_databases = request.glue_catalog.databases or None
+        if request.glue_catalog.auth_method == "keys":
+            source.glue_access_key_id = request.glue_catalog.access_key_id
+            source.glue_secret_access_key = request.glue_catalog.secret_access_key
+            source.glue_profile = None
+        else:
+            source.glue_profile = request.glue_catalog.profile or None
+            source.glue_access_key_id = None
+            source.glue_secret_access_key = None
 
     await db.flush()
     return _to_response(source)

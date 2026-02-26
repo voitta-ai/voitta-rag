@@ -5,6 +5,7 @@ from .base import BaseSyncConnector
 from .box import BoxConnector
 from .confluence import ConfluenceConnector
 from .github import GitHubConnector
+from .glue_catalog import GlueCatalogConnector
 from .google_drive import GoogleDriveConnector
 from .jira import JiraConnector
 from .sharepoint import SharePointConnector
@@ -17,6 +18,7 @@ _connectors: dict[str, BaseSyncConnector] = {
     "jira": JiraConnector(),
     "confluence": ConfluenceConnector(),
     "box": BoxConnector(),
+    "glue_catalog": GlueCatalogConnector(),
 }
 
 
