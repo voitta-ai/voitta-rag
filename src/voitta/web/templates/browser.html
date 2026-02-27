@@ -158,6 +158,7 @@
                         <option value="jira">Jira</option>
                         <option value="confluence">Confluence</option>
                         <option value="box">Box</option>
+                        <option value="glue_catalog">AWS Glue Catalog</option>
                     </select>
                 </div>
 
@@ -419,6 +420,65 @@
                             Connect
                         </button>
                         <span class="sp-connect-status" id="box-connect-status"></span>
+                    </div>
+                </div>
+
+                <!-- AWS Glue Catalog Fields -->
+                <div id="sync-fields-glue_catalog" class="sync-fields" style="display: none;">
+                    <div class="sync-fields-header">
+                        <button type="button" class="info-icon-btn" onclick="showGlueHelp()" title="AWS Glue Catalog setup info">
+                            <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+                                <circle cx="10" cy="10" r="9" fill="none" stroke="currentColor" stroke-width="1.5"/>
+                                <text x="10" y="14.5" text-anchor="middle" font-size="12" font-weight="600" fill="currentColor">i</text>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Region</label>
+                        <select id="glue-region" class="sync-select">
+                            <option value="">Select region...</option>
+                            <option value="us-east-1">us-east-1 (N. Virginia)</option>
+                            <option value="us-east-2">us-east-2 (Ohio)</option>
+                            <option value="us-west-1">us-west-1 (N. California)</option>
+                            <option value="us-west-2">us-west-2 (Oregon)</option>
+                            <option value="eu-west-1">eu-west-1 (Ireland)</option>
+                            <option value="eu-west-2">eu-west-2 (London)</option>
+                            <option value="eu-central-1">eu-central-1 (Frankfurt)</option>
+                            <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
+                            <option value="ap-southeast-1">ap-southeast-1 (Singapore)</option>
+                            <option value="ap-southeast-2">ap-southeast-2 (Sydney)</option>
+                        </select>
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Auth Method</label>
+                        <select id="glue-auth-method" class="sync-select" onchange="toggleGlueAuth()">
+                            <option value="profile">AWS Profile</option>
+                            <option value="keys">Access Keys</option>
+                        </select>
+                    </div>
+                    <div id="glue-profile-fields">
+                        <div class="form-group-compact">
+                            <label class="form-label-compact">Profile Name</label>
+                            <input type="text" id="glue-profile" class="sync-input" placeholder="default">
+                        </div>
+                    </div>
+                    <div id="glue-keys-fields" style="display: none;">
+                        <div class="form-group-compact">
+                            <label class="form-label-compact">Access Key ID</label>
+                            <input type="text" id="glue-access-key-id" class="sync-input" placeholder="AKIA...">
+                        </div>
+                        <div class="form-group-compact">
+                            <label class="form-label-compact">Secret Access Key</label>
+                            <input type="password" id="glue-secret-access-key" class="sync-input" placeholder="Secret access key">
+                        </div>
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Catalog ID</label>
+                        <input type="text" id="glue-catalog-id" class="sync-input" placeholder="Optional (defaults to account ID)">
+                    </div>
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Databases</label>
+                        <input type="text" id="glue-databases" class="sync-input" placeholder="db1, db2 or * for all">
                     </div>
                 </div>
 

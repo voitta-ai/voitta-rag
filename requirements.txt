@@ -25,5 +25,8 @@ fastembed>=0.7.0
 tqdm>=4.60.0
 torch>=2.0.0
 
+# AWS
+boto3>=1.28.0
+
 # MCP server
 fastmcp>=0.4.0
