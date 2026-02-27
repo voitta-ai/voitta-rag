@@ -28,7 +28,8 @@ Useful for teams and individuals who want to:
 
 Each folder in the file browser has a **Search** toggle that controls whether its content is included in search results.
 
-![Search toggle](docs/search-toggle.png)
+<img width="1089" height="207" alt="image" src="https://github.com/user-attachments/assets/886f6914-1777-4330-94a8-34b2c349b913" />
+
 
 When the toggle is **on** (green), the folder's documents are returned by search queries. When **off** (grey), the folder remains indexed but is invisible to search.
 
