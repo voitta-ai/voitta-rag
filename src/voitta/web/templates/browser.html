@@ -70,6 +70,9 @@
             <div class="file-list" id="file-list">
                 {% include '_file_list_items.html' %}
             </div>
+            <div class="file-list-footer" id="file-list-footer">
+                {{ items|length }} item{{ 's' if items|length != 1 else '' }}
+            </div>
         </div>
 
         <!-- Sidebar -->

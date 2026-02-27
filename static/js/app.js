@@ -273,6 +273,14 @@ function handleGdConnectedEvent(event) {
 // File Operations
 // ============================================
 
+function updateFileListFooter(fileList) {
+    const footer = document.getElementById('file-list-footer');
+    if (!footer) return;
+    const count = (fileList || document.getElementById('file-list'))
+        .querySelectorAll('.file-item').length;
+    footer.textContent = `${count} item${count !== 1 ? 's' : ''}`;
+}
+
 let refreshDebounceTimeout = null;
 
 async function refreshFileList() {
@@ -294,11 +302,15 @@ async function refreshFileList() {
             const fileList = document.getElementById('file-list');
             if (!fileList) return;
 
-            // Remember current selection
+            // Remember current selection and scroll position
             const prevSelectedPath = selectedPath;
+            const prevScrollTop = fileList.scrollTop;
 
             // Replace file list content
             fileList.innerHTML = html;
+
+            // Restore scroll position
+            fileList.scrollTop = prevScrollTop;
 
             // Re-apply current sort order
             if (currentSortColumn !== 'name' || !currentSortAsc) {
@@ -318,6 +330,9 @@ async function refreshFileList() {
                     selectedIsDir = false;
                 }
             }
+
+            // Update footer item count
+            updateFileListFooter(fileList);
         } catch (error) {
             console.error('Error refreshing file list:', error);
         }
