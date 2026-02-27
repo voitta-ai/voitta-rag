@@ -197,6 +197,31 @@ Add to `~/.claude.json` under `mcpServers` (global) or in your project settings:
 | **`dislike_memory`** | Downvote a memory (decreases relevance) |
 | **`list_memories`** | List all stored memories |
 
+## Concepts
+
+### Projects
+
+The project dropdown in the toolbar lets you organize which indexed folders are included in MCP search results. Each user gets a **Default** project automatically. You can create additional projects to group folders for different contexts — e.g., "Backend", "Client Docs", "Research".
+
+- **Switching projects** changes which folders' search toggles are active. A folder can be search-active in one project but not in another.
+- **Default project** stores search-active states globally in the user's folder settings. Non-default projects store their own independent set of search-active states.
+- The active project persists across sessions and is used by the MCP server to determine which folders to search.
+- Selecting "Manage Projects..." opens a modal to create or delete projects. The Default project cannot be deleted.
+
+### Toggle Switches
+
+Two independent toggles control folder behavior:
+
+**Enable for Indexing** (sidebar toggle) — controls whether the background indexing worker processes a folder. When enabled, the folder is queued with "Pending" status and the worker will index its files into the vector store. Disabling the toggle stops future indexing but does not remove already-indexed content.
+
+**Search** (inline checkbox in the file list) — controls whether a folder's indexed content is included in MCP search results. This is project-scoped: toggling it applies only to the currently active project. Toggling a parent folder applies recursively to all subfolders. A folder must be both indexed and search-active to appear in search results.
+
+### Anamnesis
+
+Anamnesis (Greek for "remembering") is a persistent memory system for AI assistants. Each user has an `Anamnesis/<username>/` folder containing markdown files with YAML frontmatter that store memories created and managed through MCP tools (`create_memory`, `get_memory`, `like_memory`, etc.).
+
+The Anamnesis folder is **read-only in the web UI** — you cannot upload, create, delete, or modify files through the browser. It is managed exclusively through MCP tools. The UI shows the contents for browsing and inspection only. Memories can be liked or disliked to influence their relevance in search results.
+
 ## Bulk Repository Import
 
 Import multiple Git repositories at once using a JSON config file:

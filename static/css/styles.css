@@ -359,10 +359,39 @@ a:hover {
 /* ============================================
    Browser Layout
    ============================================ */
+
+/* Fill viewport on the browser page — no page-level scroll */
+body:has(.browser-container) {
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+body:has(.browser-container) .app-header {
+    flex-shrink: 0;
+}
+
+body:has(.browser-container) .app-header .header-content {
+    max-width: none;
+}
+
+body:has(.browser-container) .app-main {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    max-width: none;
+    margin: 0;
+    width: 100%;
+}
+
 .browser-container {
     display: flex;
     flex-direction: column;
     gap: var(--spacing-lg);
+    flex: 1;
+    min-height: 0;
 }
 
 .toolbar {
@@ -492,12 +521,31 @@ a:hover {
 .browser-layout {
     display: grid;
     grid-template-columns: 1fr 320px;
+    grid-template-rows: 1fr;
     gap: var(--spacing-lg);
+    flex: 1;
+    min-height: 0;
 }
 
 @media (max-width: 900px) {
+    body:has(.browser-container) {
+        height: auto;
+        overflow: auto;
+        display: block;
+    }
+
+    body:has(.browser-container) .app-main {
+        flex: none;
+        display: block;
+    }
+
     .browser-layout {
         grid-template-columns: 1fr;
+    }
+
+    .file-list {
+        min-height: 300px;
+        max-height: 60vh;
     }
 }
 
@@ -509,6 +557,9 @@ a:hover {
     border: 1px solid var(--color-border-light);
     border-radius: var(--radius-lg);
     overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
 /* File List Header */
@@ -524,6 +575,7 @@ a:hover {
     color: var(--color-text-secondary);
     text-transform: uppercase;
     letter-spacing: 0.03em;
+    flex-shrink: 0;
 }
 
 .file-list-header .col-search,
@@ -552,7 +604,39 @@ a:hover {
 }
 
 .file-list {
-    min-height: 400px;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+}
+
+.file-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.file-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.file-list::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+}
+
+.file-list::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-tertiary);
+}
+
+/* Status bar at bottom of file list */
+.file-list-footer {
+    flex-shrink: 0;
+    padding: var(--spacing-xs) var(--spacing-md);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-tertiary);
+    border-top: 1px solid var(--color-border-light);
+    background: var(--color-bg);
+    letter-spacing: 0.02em;
 }
 
 .file-item {
@@ -606,8 +690,18 @@ a:hover {
 .file-name-text {
     font-weight: var(--font-weight-medium);
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
+    display: flex;
+    min-width: 0;
+}
+
+.file-name-stem {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-name-ext {
+    flex-shrink: 0;
 }
 
 /* Inline Toggle */
@@ -967,6 +1061,27 @@ a:hover {
     display: flex;
     flex-direction: column;
     gap: var(--spacing-lg);
+    overflow-y: auto;
+    min-height: 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border) transparent;
+}
+
+.sidebar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-tertiary);
 }
 
 /* Selection Header */
@@ -1643,6 +1758,50 @@ a:hover {
     height: 6px;
     border-radius: 50%;
     background: var(--color-text-tertiary);
+}
+
+/* SharePoint Site Picker */
+.sp-sites-section {
+    margin-top: var(--spacing-sm);
+    padding-top: var(--spacing-sm);
+    border-top: 1px solid var(--color-border-light);
+}
+
+.sp-sites-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--spacing-sm);
+}
+
+.sp-sites-list {
+    max-height: 200px;
+    overflow-y: auto;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-sm);
+    background: var(--color-bg);
+    padding: var(--spacing-xs);
+}
+
+.sp-site-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    transition: background-color var(--transition-fast);
+}
+
+.sp-site-item:hover {
+    background: var(--color-bg-hover);
+}
+
+.sp-site-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 /* ============================================
