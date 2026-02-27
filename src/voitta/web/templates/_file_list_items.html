@@ -25,7 +25,7 @@
             <polyline points="14 2 14 8 20 8"></polyline>
         </svg>
         {% endif %}
-        <span class="file-name-text">{{ item.name }}</span>
+        <span class="file-name-text">{% if item.extension %}<span class="file-name-stem">{{ item.name[:item.name|length - item.extension|length] }}</span><span class="file-name-ext">{{ item.extension }}</span>{% else %}{{ item.name }}{% endif %}</span>
     </div>
     <div class="col-sync-icon">
         {% if item_sync_type == 'sharepoint' %}

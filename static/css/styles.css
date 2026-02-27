@@ -606,8 +606,18 @@ a:hover {
 .file-name-text {
     font-weight: var(--font-weight-medium);
     overflow: hidden;
-    text-overflow: ellipsis;
     white-space: nowrap;
+    display: flex;
+    min-width: 0;
+}
+
+.file-name-stem {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-name-ext {
+    flex-shrink: 0;
 }
 
 /* Inline Toggle */

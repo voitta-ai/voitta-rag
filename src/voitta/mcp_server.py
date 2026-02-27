@@ -434,7 +434,13 @@ def list_indexed_folders() -> list[IndexedFolderInfo]:
 
 @mcp.tool()
 def get_file(file_path: str) -> FileContent:
-    """Get the full content of an indexed file.
+    """Get the full content of an indexed file by re-parsing it from disk.
+
+    IMPORTANT: Prefer using `get_chunk_range` instead of this tool. `get_chunk_range`
+    lets you retrieve specific portions of a file using chunk indices from search results,
+    which is faster and uses less context. Use `get_file` only when you truly need the
+    entire file content (e.g. for summarisation of a short document). For large files,
+    always use `get_chunk_range` to fetch only the relevant sections.
 
     Args:
         file_path: Path to the file (relative to root)

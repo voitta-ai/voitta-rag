@@ -517,7 +517,6 @@ async def list_jira_projects(
         select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
     )
     source = result.scalar_one_or_none()
-<<<<<<< HEAD
     if not source or source.source_type != "jira":
         raise HTTPException(status_code=404, detail="Jira source not found")
     if not source.jira_token:
