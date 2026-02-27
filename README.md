@@ -15,7 +15,7 @@ Useful for teams and individuals who want to:
 - Folder creation and file upload
 - Remote sync connectors: Git, Google Drive, SharePoint, Azure DevOps, Jira, Confluence, Box
 - Jira/Confluence support for both Cloud and Server/Data Center deployments
-- Per-user folder enable/disable for indexing
+- Per-user search scope control per folder
 - Automatic document indexing (DOCX, PPTX, XLSX, ODT, ODP, ODS)
 - Vector search with Qdrant (hybrid semantic + keyword, with time range filtering)
 - MCP server for Claude Code integration
@@ -23,6 +23,18 @@ Useful for teams and individuals who want to:
 - File change detection via content hashing
 - Global file/folder metadata
 - Dark/light theme support
+
+## Search Scope
+
+Each folder in the file browser has a **Search** toggle that controls whether its content is included in search results.
+
+![Search toggle](docs/search-toggle.png)
+
+When the toggle is **on** (green), the folder's documents are returned by search queries. When **off** (grey), the folder remains indexed but is invisible to search.
+
+This is useful when you work on multiple unrelated projects. For example, suppose you have two folders indexed: `a-project` (your current client engagement) and `b-project` (an internal tool). While working on `a-project`, you don't want search results polluted with code and docs from `b-project` -- unrelated hits add noise and can mislead an AI assistant that consumes the results. Toggle `b-project` off, and searches only return content from `a-project`. When you switch contexts, flip the toggles.
+
+The setting is **per-user and per-project** -- each user can have their own search scope without affecting others.
 
 ## Prerequisites
 
