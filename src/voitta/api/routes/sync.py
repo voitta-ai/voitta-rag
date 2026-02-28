@@ -608,6 +608,62 @@ async def get_sync_status(path: str, user: CurrentUser, db: DB):
     )
 
 
+@router.get("/{path:path}/acl-probe")
+async def acl_probe(
+    path: str,
+    user: CurrentUser,
+    db: DB,
+    max_items: int = Query(3, ge=1, le=20),
+):
+    """Diagnostic: fetch ACL/permissions for a few files without triggering sync."""
+    result = await db.execute(
+        select(FolderSyncSource).where(FolderSyncSource.folder_path == path)
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="No sync source for this folder")
+    if source.source_type != "sharepoint":
+        raise HTTPException(status_code=400, detail="ACL probe only supports SharePoint")
+
+    from ...services.sync.sharepoint import SharePointConnector
+
+    connector = SharePointConnector()
+    token = await connector._get_access_token(source)
+
+    # List files (just to get item IDs) — reuse existing logic
+    files = await connector.list_files(source)
+    if not connector._item_ids:
+        return {"error": "No files found", "files": []}
+
+    import httpx
+    import json
+    from ...services.sync.sharepoint import _extract_graph_error
+
+    results = []
+    sampled = list(connector._item_ids.items())[:max_items]
+    async with httpx.AsyncClient() as client:
+        for remote_path, (drive_id, item_id) in sampled:
+            url = (
+                f"https://graph.microsoft.com/v1.0/drives/{drive_id}"
+                f"/items/{item_id}/permissions"
+            )
+            resp = await client.get(
+                url, headers={"Authorization": f"Bearer {token}"}
+            )
+            if resp.status_code != 200:
+                results.append({
+                    "file": remote_path,
+                    "error": _extract_graph_error(resp),
+                })
+            else:
+                results.append({
+                    "file": remote_path,
+                    "permissions": resp.json(),
+                })
+
+    return {"items": results}
+
+
 @router.post("/{path:path}/trigger", response_model=SyncTriggerResponse)
 async def trigger_sync(
     path: str,

@@ -183,6 +183,10 @@ async def list_sites(
 
 class SharePointConnector(BaseSyncConnector):
 
+    def __init__(self):
+        # Populated during _list_recursive: {remote_path: (drive_id, item_id)}
+        self._item_ids: dict[str, tuple[str, str]] = {}
+
     async def _get_access_token(self, source) -> str:
         """Get an access token using the stored refresh token (delegated auth)."""
         if not source.sp_refresh_token:
@@ -305,6 +309,7 @@ class SharePointConnector(BaseSyncConnector):
                             created_at=item.get("createdDateTime", ""),
                         )
                     )
+                    self._item_ids[item_path] = (drive_id, item["id"])
 
             url = data.get("@odata.nextLink")
 
@@ -479,13 +484,54 @@ class SharePointConnector(BaseSyncConnector):
         logger.info("Multi-site sync complete for %s: %s", folder_path, totals)
         return totals
 
+    async def _log_permissions_sample(self, token: str, max_items: int = 3) -> None:
+        """Fetch and log permissions for a sample of files (diagnostic probe)."""
+        sampled = list(self._item_ids.items())[:max_items]
+        if not sampled:
+            logger.info("ACL probe: no items to check")
+            return
+
+        async with httpx.AsyncClient() as client:
+            for remote_path, (drive_id, item_id) in sampled:
+                url = (
+                    f"https://graph.microsoft.com/v1.0/drives/{drive_id}"
+                    f"/items/{item_id}/permissions"
+                )
+                resp = await client.get(
+                    url, headers={"Authorization": f"Bearer {token}"}
+                )
+                if resp.status_code != 200:
+                    logger.warning(
+                        "ACL probe failed for %s (%s): %s",
+                        remote_path, resp.status_code, _extract_graph_error(resp),
+                    )
+                    continue
+
+                perms = resp.json()
+                logger.info(
+                    "ACL probe [%s]: %s",
+                    remote_path,
+                    json.dumps(perms, indent=2),
+                )
+
     async def sync(self, source, fs, keep_extensions: set[str] | None = None) -> dict:
         """Sync with .vtt files preserved across mirror deletions."""
+        self._item_ids.clear()
         keep = keep_extensions or set()
         keep.add(".vtt")
         if getattr(source, "sp_all_sites", False) or getattr(source, "sp_selected_sites", None):
-            return await self._sync_multi_site(source, fs, keep)
-        return await super().sync(source, fs, keep_extensions=keep)
+            result = await self._sync_multi_site(source, fs, keep)
+        else:
+            result = await super().sync(source, fs, keep_extensions=keep)
+
+        # Probe ACLs after sync completes
+        try:
+            token = await self._get_access_token(source)
+            await self._log_permissions_sample(token)
+        except Exception as e:
+            logger.warning("ACL probe error: %s", e)
+
+        return result
 
     async def download_file(self, source, remote_path: str, local_path: Path) -> None:
         token = await self._get_access_token(source)
