@@ -76,7 +76,12 @@ async def microsoft_callback(
         )
         if resp.status_code != 200:
             logger.error("Token exchange failed (%d): %s", resp.status_code, resp.text[:500])
-            raise HTTPException(status_code=502, detail="Microsoft token exchange failed")
+            error_body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            error_desc = error_body.get("error_description", resp.text[:300])
+            raise HTTPException(
+                status_code=502,
+                detail=f"Microsoft token exchange failed: {error_desc}",
+            )
         tokens = resp.json()
 
         # Fetch user profile from Microsoft Graph
