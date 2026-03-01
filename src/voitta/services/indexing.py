@@ -108,6 +108,41 @@ def _load_source_timestamps(
         return None, None
 
 
+def _load_acl(file_path: str, abs_path: Path) -> list[str] | None:
+    """Load ACL (allowed users) for a file.
+
+    Walks up directories to find .voitta_acl.json sidecar.
+    Uses per-file key if available, otherwise falls back to _default.
+
+    Returns:
+        List of lowercase email addresses, or None if no ACL sidecar found.
+    """
+    current = abs_path.parent
+    while True:
+        sidecar = current / ".voitta_acl.json"
+        if sidecar.exists():
+            try:
+                data = json.loads(sidecar.read_text())
+                # Try file-specific key first
+                rel_from_sidecar = str(abs_path.relative_to(current))
+                entry = data.get(rel_from_sidecar)
+                if entry is not None:
+                    return entry
+                # Fall back to _default
+                default = data.get("_default")
+                if default is not None:
+                    return default
+            except Exception:
+                pass
+            break  # Found sidecar but no usable entry
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    return None
+
+
 class IndexingService:
     """Service for indexing documents into the vector store."""
 
@@ -249,8 +284,9 @@ class IndexingService:
         """Index a PDF using bucketed processing - parse and store incrementally."""
         idx_logger.info(f"[INDEX] Using BUCKETED PDF processing for: {file_path}")
 
-        # Load source timestamps
+        # Load source timestamps and ACL
         source_created_at, source_modified_at = _load_source_timestamps(file_path, abs_path)
+        allowed_users = _load_acl(file_path, abs_path)
 
         parser = PdfParser()
         file_name = abs_path.name
@@ -351,6 +387,7 @@ class IndexingService:
                         source_page_count=source_page_count,
                         source_created_at=source_created_at,
                         source_modified_at=source_modified_at,
+                        allowed_users=allowed_users,
                     )
                     chunk_data.append((chunk.text, embedding, metadata))
 
@@ -414,8 +451,9 @@ class IndexingService:
         """Standard indexing for non-PDF files."""
         idx_logger.info(f"[INDEX] Using STANDARD processing for: {file_path}")
 
-        # Load source timestamps
+        # Load source timestamps and ACL
         source_created_at, source_modified_at = _load_source_timestamps(file_path, abs_path)
+        allowed_users = _load_acl(file_path, abs_path)
 
         # Parse the file
         try:
@@ -474,6 +512,7 @@ class IndexingService:
                 indexed_at=indexed_at,
                 source_created_at=source_created_at,
                 source_modified_at=source_modified_at,
+                allowed_users=allowed_users,
             )
             chunk_data.append((chunk.text, embedding, metadata))
 
@@ -535,7 +574,8 @@ class IndexingService:
         abs_path = self.root_path / folder_path if folder_path else self.root_path
 
         if not abs_path.exists():
-            logger.error(f"Folder not found: {folder_path}")
+            logger.warning("Folder not found, cleaning up index: %s", folder_path)
+            self.remove_folder_index(folder_path, db)
             return 0, 0, 0
 
         # Update status to indexing
@@ -717,7 +757,8 @@ class IndexingService:
         abs_path = self.root_path / folder_path if folder_path else self.root_path
 
         if not abs_path.exists():
-            logger.error(f"Folder not found: {folder_path}")
+            logger.warning("Folder not found, cleaning up index: %s", folder_path)
+            self.remove_folder_index(folder_path, db)
             return 0, 0, 0
 
         files_added = 0
@@ -802,6 +843,23 @@ class IndexingService:
                 )
                 if was_indexed:
                     files_added += 1
+
+        # Purge orphan chunks in Qdrant that have no matching IndexedFile record.
+        # This catches files that were moved/renamed — the old file_path chunks
+        # remain in Qdrant even though SQLite now points to the new path.
+        qdrant_paths = self.vector_store.get_file_paths_by_index_folder(folder_path)
+        # Re-read current IndexedFile paths (may have changed above)
+        result = db.execute(
+            select(IndexedFile.file_path).where(IndexedFile.index_folder == folder_path)
+        )
+        current_indexed = {row[0] for row in result.all()}
+        orphan_paths = qdrant_paths - current_indexed
+        for orphan_path in orphan_paths:
+            deleted = self.vector_store.delete_by_file(orphan_path)
+            files_removed += 1
+            logger.info(
+                "Purged %d orphan chunks from Qdrant: %s", deleted, orphan_path
+            )
 
         logger.info(
             f"Folder '{folder_path}' synced: "
