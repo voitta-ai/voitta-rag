@@ -6,8 +6,20 @@
 <div class="landing-container">
     <div class="landing-card">
         <h1>Welcome to voitta</h1>
-        <p class="landing-subtitle">Select your profile to continue</p>
 
+        {% if ms_auth_enabled %}
+        <p class="landing-subtitle">Sign in to continue</p>
+        <a href="/auth/microsoft" class="ms-login-btn">
+            <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21">
+                <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+            </svg>
+            Sign in with Microsoft
+        </a>
+        {% else %}
+        <p class="landing-subtitle">Select your profile to continue</p>
         <div class="user-grid">
             {% for user in users %}
             <form action="/select-user/{{ user.id }}" method="post" class="user-form">
@@ -20,6 +32,7 @@
             </form>
             {% endfor %}
         </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}

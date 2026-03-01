@@ -49,6 +49,11 @@ class Settings:
         # Indexing worker settings
         self.indexing_poll_interval: int = int(os.getenv("INDEXING_POLL_INTERVAL", "10"))
 
+        # Microsoft login (Azure AD / Entra ID)
+        self.ms_auth_tenant_id: str = os.getenv("MS_AUTH_TENANT_ID", "")
+        self.ms_auth_client_id: str = os.getenv("MS_AUTH_CLIENT_ID", "")
+        self.ms_auth_client_secret: str = os.getenv("MS_AUTH_CLIENT_SECRET", "")
+
         # Base URL for OAuth redirect callbacks
         self.base_url: str = os.getenv(
             "VOITTA_BASE_URL", f"http://localhost:{self.port}"
@@ -61,6 +66,13 @@ class Settings:
 
         # Ensure root path exists
         self.root_path.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def ms_auth_enabled(self) -> bool:
+        """Microsoft login is enabled when all three MS_AUTH vars are set."""
+        return bool(
+            self.ms_auth_tenant_id and self.ms_auth_client_id and self.ms_auth_client_secret
+        )
 
     @property
     def database_url(self) -> str:

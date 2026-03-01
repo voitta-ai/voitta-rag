@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 
 from ..deps import DB, CurrentUser, Filesystem, Metadata, OptionalUser, get_active_project
+from ...config import get_settings
 from ...db.models import FolderIndexStatus, FolderSyncSource, IndexedFile, Project, ProjectFolderSetting, User, UserFolderSetting
 
 router = APIRouter()
@@ -164,10 +165,23 @@ async def landing_page(
     db: DB,
     user: OptionalUser,
 ):
-    """Landing page with user selection."""
+    """Landing page with user selection or Microsoft login."""
+    settings = get_settings()
+
     # If already logged in, redirect to browser
     if user is not None:
         return RedirectResponse(url="/browse", status_code=302)
+
+    # When Microsoft auth is enabled, always show the login page
+    if settings.ms_auth_enabled:
+        templates = get_templates(request)
+        return templates.TemplateResponse(
+            request,
+            "landing.html",
+            {"users": [], "ms_auth_enabled": True},
+        )
+
+    # --- Fallback: simple user picker (no MS auth) ---
 
     # Get all users
     result = await db.execute(select(User).order_by(User.name))
@@ -204,7 +218,7 @@ async def landing_page(
     return templates.TemplateResponse(
         request,
         "landing.html",
-        {"users": users},
+        {"users": users, "ms_auth_enabled": False},
     )
 
 

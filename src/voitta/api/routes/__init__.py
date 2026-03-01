@@ -2,9 +2,12 @@
 
 from fastapi import APIRouter
 
-from . import details, files, folders, index, metadata, pages, projects, raw, settings, sync, websocket
+from . import auth, details, files, folders, index, metadata, pages, projects, raw, settings, sync, websocket
 
 api_router = APIRouter()
+
+# Auth routes
+api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 
 # Page routes (HTML)
 api_router.include_router(pages.router, tags=["pages"])
