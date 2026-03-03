@@ -39,6 +39,7 @@ async def microsoft_login():
         "response_mode": "query",
         "scope": LOGIN_SCOPES,
         "state": state,
+        "prompt": "select_account",
     }
     url = (
         f"https://login.microsoftonline.com/{settings.ms_auth_tenant_id}/oauth2/v2.0/authorize?"

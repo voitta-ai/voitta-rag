@@ -54,7 +54,7 @@ class Settings:
         self.ms_auth_client_id: str = os.getenv("MS_AUTH_CLIENT_ID", "")
         self.ms_auth_client_secret: str = os.getenv("MS_AUTH_CLIENT_SECRET", "")
 
-        # Base URL for OAuth redirect callbacks
+        # Base URL for callbacks and raw file links
         self.base_url: str = os.getenv(
             "VOITTA_BASE_URL", f"http://localhost:{self.port}"
         )

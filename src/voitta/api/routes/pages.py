@@ -244,9 +244,20 @@ async def select_user(user_id: int, db: DB):
 
 @router.get("/logout")
 async def logout():
-    """Log out and clear cookie."""
+    """Log out: clear cookie and end Microsoft session so user can pick a different account."""
+    settings = get_settings()
     response = RedirectResponse(url="/", status_code=302)
     response.delete_cookie("voitta_user_id")
+
+    if settings.ms_auth_enabled:
+        post_logout_url = f"{settings.base_url}/"
+        ms_logout_url = (
+            f"https://login.microsoftonline.com/{settings.ms_auth_tenant_id}"
+            f"/oauth2/v2.0/logout?post_logout_redirect_uri={post_logout_url}"
+        )
+        response = RedirectResponse(url=ms_logout_url, status_code=302)
+        response.delete_cookie("voitta_user_id")
+
     return response
 
 
