@@ -54,6 +54,10 @@ class Settings:
         self.ms_auth_client_id: str = os.getenv("MS_AUTH_CLIENT_ID", "")
         self.ms_auth_client_secret: str = os.getenv("MS_AUTH_CLIENT_SECRET", "")
 
+        # Google login (OAuth2)
+        self.google_auth_client_id: str = os.getenv("GOOGLE_AUTH_CLIENT_ID", "")
+        self.google_auth_client_secret: str = os.getenv("GOOGLE_AUTH_CLIENT_SECRET", "")
+
         # Base URL for callbacks and raw file links
         self.base_url: str = os.getenv(
             "VOITTA_BASE_URL", f"http://localhost:{self.port}"
@@ -73,6 +77,16 @@ class Settings:
         return bool(
             self.ms_auth_tenant_id and self.ms_auth_client_id and self.ms_auth_client_secret
         )
+
+    @property
+    def google_auth_enabled(self) -> bool:
+        """Google login is enabled when both GOOGLE_AUTH vars are set."""
+        return bool(self.google_auth_client_id and self.google_auth_client_secret)
+
+    @property
+    def any_auth_enabled(self) -> bool:
+        """Any external auth provider is configured."""
+        return self.ms_auth_enabled or self.google_auth_enabled
 
     @property
     def database_url(self) -> str:

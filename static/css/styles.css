@@ -305,7 +305,14 @@ a:hover {
     margin-bottom: var(--spacing-2xl);
 }
 
-.ms-login-btn {
+.login-buttons {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    align-items: center;
+}
+
+.oauth-login-btn {
     display: inline-flex;
     align-items: center;
     gap: var(--spacing-md);
@@ -319,9 +326,11 @@ a:hover {
     text-decoration: none;
     cursor: pointer;
     transition: all var(--transition-normal);
+    min-width: 260px;
+    justify-content: center;
 }
 
-.ms-login-btn:hover {
+.oauth-login-btn:hover {
     transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
     border-color: var(--color-accent);

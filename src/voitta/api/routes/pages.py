@@ -165,23 +165,27 @@ async def landing_page(
     db: DB,
     user: OptionalUser,
 ):
-    """Landing page with user selection or Microsoft login."""
+    """Landing page with user selection or OAuth login."""
     settings = get_settings()
 
     # If already logged in, redirect to browser
     if user is not None:
         return RedirectResponse(url="/browse", status_code=302)
 
-    # When Microsoft auth is enabled, always show the login page
-    if settings.ms_auth_enabled:
+    # When any OAuth auth is enabled, show the login page
+    if settings.any_auth_enabled:
         templates = get_templates(request)
         return templates.TemplateResponse(
             request,
             "landing.html",
-            {"users": [], "ms_auth_enabled": True},
+            {
+                "users": [],
+                "ms_auth_enabled": settings.ms_auth_enabled,
+                "google_auth_enabled": settings.google_auth_enabled,
+            },
         )
 
-    # --- Fallback: simple user picker (no MS auth) ---
+    # --- Fallback: simple user picker (no OAuth) ---
 
     # Get all users
     result = await db.execute(select(User).order_by(User.name))
@@ -218,7 +222,7 @@ async def landing_page(
     return templates.TemplateResponse(
         request,
         "landing.html",
-        {"users": users, "ms_auth_enabled": False},
+        {"users": users, "ms_auth_enabled": False, "google_auth_enabled": False},
     )
 
 
