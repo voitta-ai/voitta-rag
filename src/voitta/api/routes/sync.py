@@ -4,14 +4,14 @@ import base64
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from ..deps import DB, CurrentUser, Filesystem
 from ...config import get_settings
-from ...db.database import get_db_context
-from ...db.models import FolderSyncSource, utc_now
+from ...db.database import get_db_context, get_sync_engine
+from ...db.models import FolderIndexStatus, FolderSyncSource, utc_now
 from ...services.sync import get_connector
 
 logger = logging.getLogger(__name__)
@@ -358,8 +358,11 @@ async def oauth_callback(
         "path": folder_path,
     })
 
-    browse_path = f"/browse/{folder_path}" if folder_path else "/browse"
-    return RedirectResponse(url=browse_path, status_code=302)
+    # Return a self-closing page — the opener tab reacts via WebSocket
+    return HTMLResponse(
+        "<html><body><script>window.close()</script>"
+        "<p>Connected! You can close this tab.</p></body></html>"
+    )
 
 
 # Legacy route so existing SharePoint bookmarks/tokens still work
@@ -606,6 +609,62 @@ async def get_sync_status(path: str, user: CurrentUser, db: DB):
         sync_error=source.sync_error,
         last_synced_at=source.last_synced_at.isoformat() if source.last_synced_at else None,
     )
+
+
+@router.get("/{path:path}/acl-probe")
+async def acl_probe(
+    path: str,
+    user: CurrentUser,
+    db: DB,
+    max_items: int = Query(3, ge=1, le=20),
+):
+    """Diagnostic: fetch ACL/permissions for a few files without triggering sync."""
+    result = await db.execute(
+        select(FolderSyncSource).where(FolderSyncSource.folder_path == path)
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="No sync source for this folder")
+    if source.source_type != "sharepoint":
+        raise HTTPException(status_code=400, detail="ACL probe only supports SharePoint")
+
+    from ...services.sync.sharepoint import SharePointConnector
+
+    connector = SharePointConnector()
+    token = await connector._get_access_token(source)
+
+    # List files (just to get item IDs) — reuse existing logic
+    files = await connector.list_files(source)
+    if not connector._item_ids:
+        return {"error": "No files found", "files": []}
+
+    import httpx
+    import json
+    from ...services.sync.sharepoint import _extract_graph_error
+
+    results = []
+    sampled = list(connector._item_ids.items())[:max_items]
+    async with httpx.AsyncClient() as client:
+        for remote_path, (drive_id, item_id) in sampled:
+            url = (
+                f"https://graph.microsoft.com/v1.0/drives/{drive_id}"
+                f"/items/{item_id}/permissions"
+            )
+            resp = await client.get(
+                url, headers={"Authorization": f"Bearer {token}"}
+            )
+            if resp.status_code != 200:
+                results.append({
+                    "file": remote_path,
+                    "error": _extract_graph_error(resp),
+                })
+            else:
+                results.append({
+                    "file": remote_path,
+                    "permissions": resp.json(),
+                })
+
+    return {"items": results}
 
 
 @router.post("/{path:path}/trigger", response_model=SyncTriggerResponse)
@@ -874,6 +933,38 @@ async def _run_sync(folder_path: str):
                         logger.info("Fetched %d transcript(s) for %s", count, folder_path)
                 except Exception as e:
                     logger.warning("Transcript fetch failed for %s: %s", folder_path, e)
+
+            # Post-sync: reconcile index with new disk state
+            try:
+                from ...services.indexing import get_indexing_service
+                from sqlalchemy.orm import Session as SyncSession
+
+                indexing_service = get_indexing_service()
+                with SyncSession(get_sync_engine()) as sync_db:
+                    # Find all indexed/pending subfolders under this folder
+                    result = sync_db.execute(
+                        select(FolderIndexStatus).where(
+                            FolderIndexStatus.folder_path.startswith(folder_path),
+                            FolderIndexStatus.status.in_(["indexed", "pending"]),
+                        )
+                    )
+                    for idx_status in result.scalars().all():
+                        added, removed, _ = indexing_service.sync_folder(
+                            idx_status.folder_path, sync_db
+                        )
+                        if removed:
+                            logger.info(
+                                "Post-sync cleanup [%s]: removed %d stale files",
+                                idx_status.folder_path,
+                                removed,
+                            )
+                    sync_db.commit()
+            except Exception as e:
+                logger.warning(
+                    "Post-sync index reconciliation failed for %s: %s",
+                    folder_path,
+                    e,
+                )
 
             source.sync_status = "synced"
             source.sync_error = None

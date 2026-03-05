@@ -7,6 +7,8 @@ from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 
+import jwt
+import requests as _requests
 from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
@@ -24,50 +26,219 @@ from .services.vector_store import get_vector_store
 
 logger = logging.getLogger(__name__)
 
-# Context variable to store current user from X-User-Name header
+# Context variable to store current user name
 current_user: ContextVar[str | None] = ContextVar("current_user", default=None)
 # Context variable to store server host from X-Server-Host header
 server_host: ContextVar[str | None] = ContextVar("server_host", default=None)
+# Context variable for per-provider auth status: {"microsoft": {...}, "google": {...}}
+auth_status: ContextVar[dict] = ContextVar("auth_status", default={})
 
-# Initialize MCP server
+settings = get_settings()
 mcp = FastMCP("voitta-rag")
 
 
+# ---------------------------------------------------------------------------
+# MCP middleware: inject auth status into every tool response
+# ---------------------------------------------------------------------------
+from fastmcp.server.middleware import Middleware, MiddlewareContext, CallNext
+from fastmcp.tools.tool import ToolResult
+import mcp.types as _mcp_types
+
+
+class AuthStatusMiddleware(Middleware):
+    """Injects per-provider auth info into structured content of every tool response."""
+
+    async def on_call_tool(
+        self,
+        context: MiddlewareContext[_mcp_types.CallToolRequestParams],
+        call_next: CallNext[_mcp_types.CallToolRequestParams, ToolResult],
+    ) -> ToolResult:
+        result = await call_next(context)
+        providers = auth_status.get()
+        user = current_user.get()
+        auth_info = {
+            "user": user or "anonymous",
+            "providers": providers or {},
+        }
+
+        # Wrap structured content so the client sees auth info
+        if result.structured_content is not None:
+            result.structured_content = {
+                "data": result.structured_content,
+                "_auth": auth_info,
+            }
+
+        # Setting meta makes to_mcp_result() return a CallToolResult directly,
+        # which the low-level server passes through without output schema validation.
+        if result.meta is None:
+            result.meta = {}
+        result.meta["auth"] = auth_info
+
+        return result
+
+
+mcp.add_middleware(AuthStatusMiddleware())
+
+
+# ---------------------------------------------------------------------------
+# Token validation: Microsoft (Graph /me) and Google (userinfo)
+# ---------------------------------------------------------------------------
+def _validate_ms_token(token_str: str) -> tuple[str, dict]:
+    """Validate a Microsoft access token by calling Graph /me.
+
+    Returns ("validated", info) or ("invalid", {}).
+    """
+    if not token_str:
+        return "invalid", {}
+    if token_str.startswith("Bearer "):
+        token_str = token_str[7:]
+
+    # Quick local checks
+    try:
+        unverified = jwt.decode(
+            token_str,
+            options={"verify_signature": False, "verify_exp": True},
+            algorithms=["RS256"],
+        )
+    except jwt.ExpiredSignatureError:
+        logger.debug("Microsoft token expired")
+        return "invalid", {}
+    except Exception:
+        logger.debug("Microsoft token decode failed", exc_info=True)
+        return "invalid", {}
+
+    # Check tenant
+    token_tid = unverified.get("tid", "")
+    if settings.ms_auth_enabled and token_tid != settings.ms_auth_tenant_id:
+        logger.warning("MS token tenant %s != configured %s", token_tid, settings.ms_auth_tenant_id)
+        return "invalid", {}
+
+    # Validate via Graph /me
+    try:
+        resp = _requests.get(
+            "https://graph.microsoft.com/v1.0/me",
+            headers={"Authorization": f"Bearer {token_str}"},
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            profile = resp.json()
+            email = (profile.get("mail") or profile.get("userPrincipalName") or "").lower().strip()
+            name = profile.get("displayName", "")
+            return "validated", {"email": email, "name": name}
+        else:
+            logger.warning("Graph /me returned %d", resp.status_code)
+            return "invalid", {}
+    except Exception:
+        logger.warning("Graph /me call failed", exc_info=True)
+        return "invalid", {}
+
+
+def _validate_google_token(token_str: str) -> tuple[str, dict]:
+    """Validate a Google access token by calling userinfo endpoint.
+
+    Returns ("validated", info) or ("invalid", {}).
+    """
+    if not token_str:
+        return "invalid", {}
+    if token_str.startswith("Bearer "):
+        token_str = token_str[7:]
+
+    try:
+        resp = _requests.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {token_str}"},
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            profile = resp.json()
+            email = (profile.get("email") or "").lower().strip()
+            name = profile.get("name", "")
+            return "validated", {"email": email, "name": name}
+        else:
+            logger.warning("Google userinfo returned %d", resp.status_code)
+            return "invalid", {}
+    except Exception:
+        logger.warning("Google userinfo call failed", exc_info=True)
+        return "invalid", {}
+
+
 class UserHeaderMiddleware(BaseHTTPMiddleware):
-    """Middleware to extract X-User-Name header and store in context."""
+    """Middleware: validates Microsoft and Google auth tokens from headers."""
 
     async def dispatch(self, request: Request, call_next):
-        user_name = request.headers.get("X-User-Name")
-        if user_name:
-            print(f"🔑 MCP request from user: {user_name}", flush=True)
-            current_user.set(user_name)
-        else:
-            print(f"🔑 MCP request (no user header) {request.method} {request.url.path}", flush=True)
-            current_user.set(None)
+        providers = {}
+        resolved_user = None
+
+        # --- Microsoft ---
+        ms_token = request.headers.get("x-auth-token-microsoft", "")
+        ms_email_header = request.headers.get("x-auth-email-microsoft")
+        ms_name_header = request.headers.get("x-auth-name-microsoft")
+
+        if ms_token:
+            ms_status, ms_info = _validate_ms_token(ms_token)
+            email = ms_info.get("email") or ms_email_header
+            name = ms_info.get("name") or ms_name_header
+            providers["microsoft"] = {"status": ms_status, "email": email, "name": name}
+            if ms_status == "validated" and not resolved_user:
+                resolved_user = email or name
+
+        # --- Google ---
+        g_token = request.headers.get("x-auth-token-google", "")
+        g_email_header = request.headers.get("x-auth-email-google")
+        g_name_header = request.headers.get("x-auth-name-google")
+
+        if g_token:
+            g_status, g_info = _validate_google_token(g_token)
+            email = g_info.get("email") or g_email_header
+            name = g_info.get("name") or g_name_header
+            providers["google"] = {"status": g_status, "email": email, "name": name}
+            if g_status == "validated" and not resolved_user:
+                resolved_user = email or name
+
+        # --- Fallback: legacy X-User-Name header ---
+        if not resolved_user:
+            user_name = request.headers.get("X-User-Name")
+            if user_name:
+                resolved_user = user_name
+                providers["header"] = {"status": "trusted", "name": user_name}
+
+        current_user.set(resolved_user)
+        auth_status.set(providers)
 
         host = request.headers.get("X-Server-Host")
-        if host:
-            server_host.set(host)
-        else:
-            server_host.set(None)
+        server_host.set(host or None)
 
         response = await call_next(request)
         return response
 
 
-
 def _get_current_user_name() -> str | None:
-    """Get the current user name from context, or None if not provided."""
-    retval = current_user.get()
-    return retval
+    """Get the current user name from X-User-Name header."""
+    return current_user.get()
 
 
-def _get_or_create_user(db: Session, user_name: str) -> User:
-    """Get existing user or create a new one (case-insensitive match)."""
-    result = db.execute(select(User).where(func.lower(User.name) == user_name.lower()))
+def _get_or_create_user(db: Session, user_identifier: str) -> User:
+    """Get existing user or create a new one.
+
+    When identifier contains '@' (email from token), match by email first.
+    Otherwise match by name (case-insensitive).
+    """
+    if "@" in user_identifier:
+        email = user_identifier.lower()
+        result = db.execute(select(User).where(func.lower(User.email) == email))
+        user = result.scalar_one_or_none()
+        if not user:
+            display_name = email.split("@")[0]
+            user = User(name=display_name, email=email)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+        return user
+
+    result = db.execute(select(User).where(func.lower(User.name) == user_identifier.lower()))
     user = result.scalar_one_or_none()
     if not user:
-        user = User(name=user_name)
+        user = User(name=user_identifier)
         db.add(user)
         db.commit()
         db.refresh(user)
@@ -662,14 +833,14 @@ def get_file_uri(file_path: str) -> FileUriResult:
     if mime_type is None:
         mime_type = "application/octet-stream"
 
-    # Construct URI using main app host/port
-    # X-Server-Host can be a full base URL like "https://hostname.com"
+    # Construct URI: prefer X-Server-Host header, then VOITTA_BASE_URL, then localhost
     base_url = server_host.get()
     if base_url:
-        # Add default http:// if no protocol specified
         if not base_url.startswith(("http://", "https://")):
             base_url = f"http://{base_url}"
         base_url = base_url.rstrip("/")
+    elif settings.base_url:
+        base_url = settings.base_url.rstrip("/")
     else:
         host = settings.host
         port = settings.port
@@ -1197,8 +1368,6 @@ def run_server():
 
     logger.info(f"Starting MCP server on {host}:{port} (transport: {transport})")
 
-    # Add middleware to extract user header
-    # Access the underlying Starlette app and add middleware
     app = mcp.http_app(transport=transport, stateless_http=True)
     app.add_middleware(UserHeaderMiddleware)
 

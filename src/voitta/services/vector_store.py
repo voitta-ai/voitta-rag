@@ -35,6 +35,8 @@ class ChunkMetadata:
     # Source timestamps (Unix epoch integers)
     source_created_at: int | None = None
     source_modified_at: int | None = None
+    # ACL: list of lowercase email addresses allowed to access this document
+    allowed_users: list[str] | None = None
 
 
 @dataclass
@@ -76,8 +78,9 @@ class VectorStoreService:
             # Check if sparse vectors are configured
             sparse = info.config.params.sparse_vectors or {}
             self._has_sparse = SPARSE_VECTOR_NAME in sparse
-            # Ensure timestamp indexes exist on existing collections
+            # Ensure indexes exist on existing collections
             self._ensure_timestamp_indexes()
+            self._ensure_acl_index()
         except (UnexpectedResponse, Exception):
             logger.info(f"Creating collection '{self.collection_name}'")
             self._client.create_collection(
@@ -93,7 +96,7 @@ class VectorStoreService:
                 },
             )
             # Create payload indexes for efficient filtering
-            for field in ("file_path", "folder_path", "index_folder"):
+            for field in ("file_path", "folder_path", "index_folder", "allowed_users"):
                 self._client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name=field,
@@ -123,6 +126,38 @@ class VectorStoreService:
                     logger.info(f"Created index for '{field}' on '{self.collection_name}'")
         except Exception as e:
             logger.warning(f"Failed to ensure timestamp indexes: {e}")
+
+    def _ensure_acl_index(self) -> None:
+        """Create KEYWORD payload index for allowed_users if missing."""
+        try:
+            info = self._client.get_collection(self.collection_name)
+            existing = set(info.payload_schema.keys()) if info.payload_schema else set()
+            if "allowed_users" not in existing:
+                self._client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="allowed_users",
+                    field_schema=qmodels.PayloadSchemaType.KEYWORD,
+                )
+                logger.info(f"Created index for 'allowed_users' on '{self.collection_name}'")
+        except Exception as e:
+            logger.warning(f"Failed to ensure ACL index: {e}")
+
+    def set_file_acl(self, file_path: str, allowed_users: list[str]) -> None:
+        """Update allowed_users on all chunks for a specific file."""
+        self.client.set_payload(
+            collection_name=self.collection_name,
+            payload={"allowed_users": allowed_users},
+            points=qmodels.FilterSelector(
+                filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="file_path",
+                            match=qmodels.MatchValue(value=file_path),
+                        )
+                    ]
+                )
+            ),
+        )
 
     def store_chunks(
         self,
@@ -174,6 +209,9 @@ class VectorStoreService:
                 payload["source_created_at"] = metadata.source_created_at
             if metadata.source_modified_at is not None:
                 payload["source_modified_at"] = metadata.source_modified_at
+            # Add ACL if present
+            if metadata.allowed_users is not None:
+                payload["allowed_users"] = metadata.allowed_users
 
             # Build vector: unnamed dense + optional sparse
             if sparse_vectors and idx < len(sparse_vectors):
@@ -321,6 +359,32 @@ class VectorStoreService:
 
         return count
 
+    def get_file_paths_by_index_folder(self, index_folder: str) -> set[str]:
+        """Return all unique file_path values in Qdrant for a given index_folder."""
+        file_paths: set[str] = set()
+        offset = None
+        while True:
+            results, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="index_folder",
+                            match=qmodels.MatchValue(value=index_folder),
+                        )
+                    ]
+                ),
+                limit=1000,
+                offset=offset,
+                with_payload=["file_path"],
+                with_vectors=False,
+            )
+            for point in results:
+                file_paths.add(point.payload["file_path"])
+            if offset is None:
+                break
+        return file_paths
+
     def _build_filter(
         self,
         folder_filter: str | None = None,
@@ -413,6 +477,7 @@ class VectorStoreService:
                 source_page_count=payload.get("source_page_count"),
                 source_created_at=payload.get("source_created_at"),
                 source_modified_at=payload.get("source_modified_at"),
+                allowed_users=payload.get("allowed_users"),
             ),
             score=result.score,
         )
@@ -818,6 +883,7 @@ class VectorStoreService:
                                     source_page_count=payload.get("source_page_count"),
                                     source_created_at=payload.get("source_created_at"),
                                     source_modified_at=payload.get("source_modified_at"),
+                                    allowed_users=payload.get("allowed_users"),
                                 ),
                                 score=None,
                             )

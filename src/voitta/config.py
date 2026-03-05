@@ -49,7 +49,16 @@ class Settings:
         # Indexing worker settings
         self.indexing_poll_interval: int = int(os.getenv("INDEXING_POLL_INTERVAL", "10"))
 
-        # Base URL for OAuth redirect callbacks
+        # Microsoft login (Azure AD / Entra ID)
+        self.ms_auth_tenant_id: str = os.getenv("MS_AUTH_TENANT_ID", "")
+        self.ms_auth_client_id: str = os.getenv("MS_AUTH_CLIENT_ID", "")
+        self.ms_auth_client_secret: str = os.getenv("MS_AUTH_CLIENT_SECRET", "")
+
+        # Google login (OAuth2)
+        self.google_auth_client_id: str = os.getenv("GOOGLE_AUTH_CLIENT_ID", "")
+        self.google_auth_client_secret: str = os.getenv("GOOGLE_AUTH_CLIENT_SECRET", "")
+
+        # Base URL for callbacks and raw file links
         self.base_url: str = os.getenv(
             "VOITTA_BASE_URL", f"http://localhost:{self.port}"
         )
@@ -61,6 +70,23 @@ class Settings:
 
         # Ensure root path exists
         self.root_path.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def ms_auth_enabled(self) -> bool:
+        """Microsoft login is enabled when all three MS_AUTH vars are set."""
+        return bool(
+            self.ms_auth_tenant_id and self.ms_auth_client_id and self.ms_auth_client_secret
+        )
+
+    @property
+    def google_auth_enabled(self) -> bool:
+        """Google login is enabled when both GOOGLE_AUTH vars are set."""
+        return bool(self.google_auth_client_id and self.google_auth_client_secret)
+
+    @property
+    def any_auth_enabled(self) -> bool:
+        """Any external auth provider is configured."""
+        return self.ms_auth_enabled or self.google_auth_enabled
 
     @property
     def database_url(self) -> str:

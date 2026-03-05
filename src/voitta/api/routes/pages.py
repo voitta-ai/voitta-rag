@@ -5,6 +5,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 
 from ..deps import DB, CurrentUser, Filesystem, Metadata, OptionalUser, get_active_project
+from ...config import get_settings
 from ...db.models import FolderIndexStatus, FolderSyncSource, IndexedFile, Project, ProjectFolderSetting, User, UserFolderSetting
 
 router = APIRouter()
@@ -164,10 +165,27 @@ async def landing_page(
     db: DB,
     user: OptionalUser,
 ):
-    """Landing page with user selection."""
+    """Landing page with user selection or OAuth login."""
+    settings = get_settings()
+
     # If already logged in, redirect to browser
     if user is not None:
         return RedirectResponse(url="/browse", status_code=302)
+
+    # When any OAuth auth is enabled, show the login page
+    if settings.any_auth_enabled:
+        templates = get_templates(request)
+        return templates.TemplateResponse(
+            request,
+            "landing.html",
+            {
+                "users": [],
+                "ms_auth_enabled": settings.ms_auth_enabled,
+                "google_auth_enabled": settings.google_auth_enabled,
+            },
+        )
+
+    # --- Fallback: simple user picker (no OAuth) ---
 
     # Get all users
     result = await db.execute(select(User).order_by(User.name))
@@ -204,7 +222,7 @@ async def landing_page(
     return templates.TemplateResponse(
         request,
         "landing.html",
-        {"users": users},
+        {"users": users, "ms_auth_enabled": False, "google_auth_enabled": False},
     )
 
 
@@ -230,9 +248,20 @@ async def select_user(user_id: int, db: DB):
 
 @router.get("/logout")
 async def logout():
-    """Log out and clear cookie."""
+    """Log out: clear cookie and end Microsoft session so user can pick a different account."""
+    settings = get_settings()
     response = RedirectResponse(url="/", status_code=302)
     response.delete_cookie("voitta_user_id")
+
+    if settings.ms_auth_enabled:
+        post_logout_url = f"{settings.base_url}/"
+        ms_logout_url = (
+            f"https://login.microsoftonline.com/{settings.ms_auth_tenant_id}"
+            f"/oauth2/v2.0/logout?post_logout_redirect_uri={post_logout_url}"
+        )
+        response = RedirectResponse(url=ms_logout_url, status_code=302)
+        response.delete_cookie("voitta_user_id")
+
     return response
 
 

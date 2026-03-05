@@ -156,7 +156,27 @@ INDEXING_POLL_INTERVAL=10
 
 # MCP server port
 MCP_PORT=8001
+
+# Microsoft login (Azure AD / Entra ID) — optional
+MS_AUTH_TENANT_ID=
+MS_AUTH_CLIENT_ID=
+MS_AUTH_CLIENT_SECRET=
+
+# Google login (OAuth2) — optional
+GOOGLE_AUTH_CLIENT_ID=
+GOOGLE_AUTH_CLIENT_SECRET=
+
+# Base URL for OAuth redirect callbacks
+VOITTA_BASE_URL=https://your-domain.com
 ```
+
+### Authentication
+
+The web UI supports optional OAuth login via **Microsoft (Azure AD)** and/or **Google**. Set the corresponding env vars to enable each provider. When any provider is configured, the landing page shows login buttons instead of the user picker.
+
+For Microsoft, you need an Azure AD app registration with redirect URI `{VOITTA_BASE_URL}/auth/microsoft/callback`. For Google, create OAuth credentials in Google Cloud Console with redirect URI `{VOITTA_BASE_URL}/auth/google/callback`.
+
+The MCP server validates tokens independently via `X-Auth-Token-Microsoft` and `X-Auth-Token-Google` headers — calling Microsoft Graph `/me` and Google userinfo respectively. Every tool response includes an `_auth` block with per-provider validation status.
 
 ## MCP Server (for Claude Code integration)
 

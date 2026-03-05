@@ -5,9 +5,36 @@
 {% block content %}
 <div class="landing-container">
     <div class="landing-card">
-        <h1>Welcome to voitta</h1>
-        <p class="landing-subtitle">Select your profile to continue</p>
+        <h1>Welcome to Voitta RAG</h1>
 
+        {% if ms_auth_enabled or google_auth_enabled %}
+        <p class="landing-subtitle">Sign in to continue</p>
+        <div class="login-buttons">
+            {% if ms_auth_enabled %}
+            <a href="/auth/microsoft" class="oauth-login-btn ms-login-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21">
+                    <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+                    <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+                    <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+                    <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+                </svg>
+                Sign in with Microsoft
+            </a>
+            {% endif %}
+            {% if google_auth_enabled %}
+            <a href="/auth/google" class="oauth-login-btn google-login-btn">
+                <svg xmlns="http://www.w3.org/2000/svg" width="21" height="21" viewBox="0 0 21 21">
+                    <path d="M20.1 10.7c0-.7-.1-1.4-.2-2H10.5v3.8h5.4c-.2 1.2-.9 2.3-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.3z" fill="#4285F4"/>
+                    <path d="M10.5 21c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H1.6v2.6C3.2 18.6 6.6 21 10.5 21z" fill="#34A853"/>
+                    <path d="M4.9 12.9c-.2-.6-.3-1.2-.3-1.9s.1-1.3.3-1.9V6.5H1.6C.9 7.9.5 9.4.5 11s.4 3.1 1.1 4.5l3.3-2.6z" fill="#FBBC05"/>
+                    <path d="M10.5 4.1c1.5 0 2.8.5 3.8 1.5l2.9-2.9C15.4 1 13.2 0 10.5 0 6.6 0 3.2 2.4 1.6 5.9l3.3 2.6c.8-2.3 3-4.4 5.6-4.4z" fill="#EA4335"/>
+                </svg>
+                Sign in with Google
+            </a>
+            {% endif %}
+        </div>
+        {% else %}
+        <p class="landing-subtitle">Select your profile to continue</p>
         <div class="user-grid">
             {% for user in users %}
             <form action="/select-user/{{ user.id }}" method="post" class="user-form">
@@ -20,6 +47,7 @@
             </form>
             {% endfor %}
         </div>
+        {% endif %}
     </div>
 </div>
 {% endblock %}
