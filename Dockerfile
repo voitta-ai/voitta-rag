@@ -12,9 +12,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && pip install -r _deps.txt \
     && rm _deps.txt
 
+# Install MinerU for PDF parsing (separate step — heavy dependency tree)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install mineru
+
 # Copy source and install package (fast — deps already cached)
 COPY src/ src/
 COPY static/ static/
+COPY scripts/ scripts/
 COPY entrypoint.sh .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps .

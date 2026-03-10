@@ -18,9 +18,11 @@ services:
       - VOITTA_DB_PATH=/data/voitta.db
       - VOITTA_USERS_FILE=/data/users.txt
       - HF_HOME=/root/.cache/huggingface
+      - MINERU_MODELS_DIR=/root/.cache/mineru-models
     volumes:
       - ${VOITTA_ROOT_PATH}:/data
       - ${SSH_KEY_DIR:-~/.ssh}:/root/.ssh:ro
       - ${MODEL_CACHE_DIR:-~/.cache/huggingface}:/root/.cache/huggingface
+      - ${MODEL_CACHE_DIR:-~/.cache/huggingface}/mineru-models:/root/.cache/mineru-models
     depends_on:
       - qdrant

@@ -37,7 +37,9 @@ logger = logging.getLogger(__name__)
 
 # Path to MinerU venv and wrapper script relative to project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
-MINERU_PYTHON = PROJECT_ROOT / ".mineru-venv" / "bin" / "python"
+_MINERU_VENV_PYTHON = PROJECT_ROOT / ".mineru-venv" / "bin" / "python"
+# Use .mineru-venv if available (local dev), otherwise system python (Docker)
+MINERU_PYTHON = _MINERU_VENV_PYTHON if _MINERU_VENV_PYTHON.exists() else Path("python3")
 MINERU_SCRIPT = PROJECT_ROOT / "scripts" / "mineru_parse.py"
 
 def get_bucket_settings() -> tuple[int, int]:
@@ -226,11 +228,6 @@ class PdfParser(BaseParser):
         if not file_path.exists():
             pdf_logger.error(f"File not found: {file_path}")
             yield ParserResult.failure(f"File not found: {file_path}")
-            return
-
-        if not MINERU_PYTHON.exists():
-            pdf_logger.error(f"MinerU venv not found at {MINERU_PYTHON}")
-            yield ParserResult.failure(f"MinerU venv not found at {MINERU_PYTHON}")
             return
 
         if not MINERU_SCRIPT.exists():
