@@ -1628,6 +1628,7 @@ function msInit(id, items, selectedValues) {
     // items: [{value, label}, ...] -- always prepend ALL
     _msState[id] = { items: items, selected: new Set(selectedValues || []) };
     _msRender(id);
+    document.getElementById(id + '-dropdown')?.classList.remove('open');
 }
 
 function _msRender(id) {
@@ -1639,8 +1640,6 @@ function _msRender(id) {
     if (!state) return;
 
     dropdown.innerHTML = '';
-    // Close dropdown when re-rendering
-    dropdown.classList.remove('open');
 
     if (state.items.length === 0) {
         // No items fetched yet — show hint in dropdown
