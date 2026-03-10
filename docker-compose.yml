@@ -16,10 +16,10 @@ services:
       - QDRANT_HOST=qdrant
       - VOITTA_ROOT_PATH=/data/fs
       - VOITTA_DB_PATH=/data/voitta.db
+      - VOITTA_USERS_FILE=/data/users.txt
       - HF_HOME=/root/.cache/huggingface
     volumes:
       - ${VOITTA_ROOT_PATH}:/data
-      - ./users.txt:/app/users.txt:ro
       - ${SSH_KEY_DIR:-~/.ssh}:/root/.ssh:ro
       - ${MODEL_CACHE_DIR:-~/.cache/huggingface}:/root/.cache/huggingface
     depends_on:

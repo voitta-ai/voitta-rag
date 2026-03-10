@@ -61,15 +61,7 @@ class AuthStatusMiddleware(Middleware):
             "providers": providers or {},
         }
 
-        # Wrap structured content so the client sees auth info
-        if result.structured_content is not None:
-            result.structured_content = {
-                "data": result.structured_content,
-                "_auth": auth_info,
-            }
-
-        # Setting meta makes to_mcp_result() return a CallToolResult directly,
-        # which the low-level server passes through without output schema validation.
+        # Put auth info in meta only — avoids breaking output schema validation
         if result.meta is None:
             result.meta = {}
         result.meta["auth"] = auth_info

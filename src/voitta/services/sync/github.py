@@ -367,6 +367,11 @@ class GitHubConnector(BaseSyncConnector):
             # Pull updates
             logger.info("Pulling updates for %s (branch: %s)", local_root, branch)
 
+            # Ensure the target branch is tracked (clone may have used --single-branch for a different branch)
+            await self._run_git(
+                ["remote", "set-branches", "origin", branch], cwd=str(repo_dir), source=source
+            )
+
             rc, out, err = await self._run_git(
                 ["fetch", "--prune", "origin"], cwd=str(repo_dir), source=source
             )
@@ -505,8 +510,13 @@ class GitHubConnector(BaseSyncConnector):
             )
 
         branch = source.gh_branch or "main"
+        safe_name = branch.replace("/", "--")
+        branches_dir = local_root / "branches"
+        branches_dir.mkdir(parents=True, exist_ok=True)
+        branch_root = branches_dir / safe_name
+        branch_root.mkdir(parents=True, exist_ok=True)
         stats = await self._sync_single_branch(
-            source, repo_url, branch, local_root, subfolder, keep_extensions,
+            source, repo_url, branch, branch_root, subfolder, keep_extensions,
         )
         logger.info("Git sync complete for %s: %s", folder_path, stats)
         return stats
