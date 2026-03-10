@@ -17,7 +17,6 @@ docker-up:
 	-docker stop qdrant 2>/dev/null && docker rm qdrant 2>/dev/null
 	mkdir -p $(VOITTA_ROOT_PATH)/qdrant $(VOITTA_ROOT_PATH)/fs
 	touch $(VOITTA_ROOT_PATH)/voitta.db
-	touch users.txt
 	docker compose up -d --build
 
 docker-down:

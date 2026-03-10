@@ -19,7 +19,6 @@ services:
       - HF_HOME=/root/.cache/huggingface
     volumes:
       - ${VOITTA_ROOT_PATH}:/data
-      - ./users.txt:/app/users.txt:ro
       - ${SSH_KEY_DIR:-~/.ssh}:/root/.ssh:ro
       - ${MODEL_CACHE_DIR:-~/.cache/huggingface}:/root/.cache/huggingface
     depends_on:

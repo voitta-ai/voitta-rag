@@ -15,9 +15,11 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # Copy source and install package (fast — deps already cached)
 COPY src/ src/
 COPY static/ static/
+COPY entrypoint.sh .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps .
 
 EXPOSE 8000
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["python3", "-m", "uvicorn", "src.voitta.main:app", "--host", "0.0.0.0", "--port", "8000"]
