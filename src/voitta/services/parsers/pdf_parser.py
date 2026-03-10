@@ -37,9 +37,7 @@ logger = logging.getLogger(__name__)
 
 # Path to MinerU venv and wrapper script relative to project root
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
-_MINERU_VENV_PYTHON = PROJECT_ROOT / ".mineru-venv" / "bin" / "python"
-# Use .mineru-venv if available (local dev), otherwise system python (Docker)
-MINERU_PYTHON = _MINERU_VENV_PYTHON if _MINERU_VENV_PYTHON.exists() else Path("python3")
+MINERU_PYTHON = PROJECT_ROOT / ".mineru-venv" / "bin" / "python"
 MINERU_SCRIPT = PROJECT_ROOT / "scripts" / "mineru_parse.py"
 
 def get_bucket_settings() -> tuple[int, int]:
