@@ -18,6 +18,7 @@ Useful for teams and individuals who want to:
   - [Dependencies Note](#dependencies-note)
 - [Quick Start](#quick-start)
   - [Option A: Docker (recommended)](#option-a-docker-recommended)
+    - [Mounting local directories (Mapped Paths)](#mounting-local-directories-mapped-paths)
   - [Option B: Local development](#option-b-local-development)
 - [Configuration](#configuration)
   - [Authentication](#authentication)
@@ -31,6 +32,9 @@ Useful for teams and individuals who want to:
   - [Toggle Switches](#toggle-switches)
   - [Anamnesis](#anamnesis)
 - [Bulk Repository Import](#bulk-repository-import)
+  - [Config format](#config-format)
+  - [Running against Docker](#running-against-docker)
+  - [Customizing](#customizing)
 
 ## Features
 
@@ -115,16 +119,18 @@ SSH_KEY_DIR=/path/to/ssh/keys docker compose up -d --build
 
 #### Mounting local directories (Mapped Paths)
 
-In Docker mode, local directories are mounted into the container via `docker-compose.override.yml` (gitignored, merged automatically by Docker Compose). Each mounted directory appears automatically in the UI as a folder with a "Mapped Path" badge. The directory name becomes the folder name, so use descriptive names:
+In Docker mode, local directories are mounted into the container via `docker-compose.override.yml` (gitignored, merged automatically by Docker Compose). Each mounted directory appears automatically in the UI as a folder with a "Mapped Path" badge. The directory name becomes the folder name, so use descriptive names.
+
+For example, if Google Drive syncs to `~/g/gdrive`:
 
 ```yaml
 services:
   voitta-rag:
     volumes:
-      - ~/Google Drive:/data/fs/Google Drive:ro
+      - ~/g/gdrive:/data/fs/gdrive:ro
 ```
 
-The folder appears as "Google Drive" in the UI. Enable indexing on it like any other folder. The file watcher detects changes automatically.
+The folder appears as "gdrive" in the UI. Enable indexing on it like any other folder. The file watcher detects changes automatically.
 
 Multiple directories:
 
@@ -132,13 +138,15 @@ Multiple directories:
 services:
   voitta-rag:
     volumes:
-      - ~/Google Drive:/data/fs/Google Drive:ro
-      - ~/Dropbox/Projects:/data/fs/Dropbox Projects:ro
+      - ~/g/gdrive:/data/fs/gdrive:ro
+      - ~/Dropbox/Projects:/data/fs/dropbox-projects:ro
 ```
 
 Mapped Path folders cannot be created or deleted from the UI -- they are managed entirely through volume mounts. Upload is also disabled for these folders since the source of truth is the host directory. Restart with `make docker-up` after changing mounts.
 
 Note: symlinks inside mounted volumes won't work -- Docker doesn't resolve symlink targets across mount boundaries. Use volume mounts instead.
+
+This approach complements the [Bulk Repository Import](#bulk-repository-import) — use volume mounts for local/synced folders and the import script for Git repositories.
 
 ### Option B: Local development
 
@@ -325,11 +333,16 @@ Import multiple Git repositories at once using a JSON config file:
 python3 scripts/import_repos.py [path/to/config.json]
 ```
 
-Defaults to `scripts/import_repos.json`. Copy the example to get started:
+Defaults to `scripts/import_repos.json`. An example config is provided at `scripts/import_repos.example.json` showing the format (per-host auth plus folders-of-repos).
+
+Copy it to get started:
 
 ```bash
 cp scripts/import_repos.example.json scripts/import_repos.json
+python3 scripts/import_repos.py
 ```
+
+### Config format
 
 The config specifies per-host auth and folders with repo lists:
 
@@ -352,5 +365,33 @@ The config specifies per-host auth and folders with repo lists:
 }
 ```
 
-Branch is auto-detected from the remote when not specified. The `import_repos.json` file is gitignored (may contain credentials).
+**Folders** map to top-level folders in the voitta-rag UI. A common pattern is one folder per GitHub organization, so repos appear as `org-name/repo-name` in the file browser.
+
+**Auth methods:**
+- `ssh` — uses SSH keys mounted into the container (default: `~/.ssh`). No credentials in the config file.
+- `token` — uses a personal access token. Include `username` and `token` fields in the host entry.
+
+**Branch** is auto-detected from the remote when not specified (prefers `main`, then `master`, then `develop`).
+
+### Running against Docker
+
+When running voitta-rag via Docker Compose (`make docker-up`), the script connects to `localhost:58000` by default (reads `DOCKER_PORT` from `.env`):
+
+```bash
+python3 scripts/import_repos.py scripts/import_repos_personal.json
+```
+
+The script waits for the server to be ready, creates folders, configures sync, and polls until each repo finishes syncing. Already-imported repos are skipped automatically.
+
+### Customizing
+
+To add or remove repos, edit the `folders` entries. Each repo entry needs at minimum a `repo` URL:
+
+```json
+{"repo": "git@github.com:your-org/new-repo.git"}
+```
+
+To use a specific branch instead of auto-detection, add `"branch": "branch-name"`.
+
+Both `import_repos.json` and `import_repos_personal.json` are gitignored since they may contain credentials. Only `scripts/import_repos.example.json` is committed.
 
