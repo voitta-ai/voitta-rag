@@ -1,23 +1,23 @@
 VENV := .venv
 PYTHON := $(VENV)/bin/python3
 PIP := $(VENV)/bin/pip3
+UV := $(VENV)/bin/uv
 
 -include .env
 
-.PHONY: install run docker-up docker-down
+.PHONY: install run models
 
 install:
 	python3 -m venv $(VENV)
-	$(PIP) install -e ".[dev]"
+	$(PIP) install --upgrade pip
+	$(PIP) install uv
+	$(UV) pip install -e ".[dev]"
+	$(UV) pip install "mineru[all]" pymupdf
+	@echo ""
+	@echo "Run 'make models' to download MinerU models (required for PDF parsing)."
+
+models:
+	$(VENV)/bin/mineru-models-download
 
 run:
-	$(PYTHON) -m uvicorn src.voitta.main:app --reload --host 0.0.0.0
-
-docker-up:
-	-docker stop qdrant 2>/dev/null && docker rm qdrant 2>/dev/null
-	mkdir -p $(VOITTA_DATA_DIR)/qdrant $(VOITTA_DATA_DIR)/fs
-	touch $(VOITTA_DATA_DIR)/voitta.db
-	docker compose up -d --build
-
-docker-down:
-	docker compose down
+	$(PYTHON) -m uvicorn src.voitta.main:app --reload --host 0.0.0.0 --port $(VOITTA_PORT)

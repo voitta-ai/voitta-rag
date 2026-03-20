@@ -66,4 +66,3 @@ scripts/import_repos.json
 \#*
 .#*
 CLAUDE.md
-docker-compose.override.yml

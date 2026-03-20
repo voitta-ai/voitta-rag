@@ -21,7 +21,7 @@ class Settings:
             os.getenv("VOITTA_DB_PATH", "./voitta.db")
         ).resolve()
         self.host: str = os.getenv("VOITTA_HOST", "0.0.0.0")
-        self.port: int = int(os.getenv("VOITTA_PORT", "8000"))
+        self.port: int = int(os.getenv("VOITTA_PORT", "59000"))
         self.debug: bool = os.getenv("VOITTA_DEBUG", "false").lower() == "true"
 
         # Qdrant settings

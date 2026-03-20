@@ -72,65 +72,15 @@ pip install "transformers>=4.36.0,<5.0.0"
 
 ## Quick Start
 
-### Option A: Docker (recommended)
-
-Starts both voitta-rag and Qdrant with persistent storage via Docker Compose:
-
 ```bash
-cp .env.example .env
-make docker-up
-```
-
-Open http://localhost:58000 in your browser. Stop with `make docker-down`.
-
-By default, `~/.ssh` is mounted read-only into the container for SSH-based git access. Override with:
-
-```bash
-SSH_KEY_DIR=/path/to/ssh/keys docker compose up -d --build
-```
-
-#### Mounting local directories
-
-To index a local directory (e.g., Google Drive for Desktop) without using a remote sync connector, create a `docker-compose.override.yml` (gitignored, merged automatically by Docker Compose):
-
-```yaml
-services:
-  voitta-rag:
-    volumes:
-      - ~/Google Drive:/data/fs/gdrive:ro
-```
-
-The directory appears as a folder named `gdrive` in the UI. Enable indexing on it like any other folder. The file watcher detects changes automatically.
-
-You can mount multiple directories:
-
-```yaml
-services:
-  voitta-rag:
-    volumes:
-      - ~/Google Drive:/data/fs/gdrive:ro
-      - ~/Dropbox/Projects:/data/fs/dropbox-projects:ro
-```
-
-Note: symlinks inside mounted volumes won't work -- Docker doesn't resolve symlink targets across mount boundaries. Use volume mounts instead.
-
-### Option B: Local development
-
-```bash
-# Start Qdrant
-mkdir -p qdrant_storage
-docker run -d --name qdrant \
-  -p 6333:6333 -p 6334:6334 \
-  -v $(pwd)/qdrant_storage:/qdrant/storage \
-  qdrant/qdrant
-
-# Install and run
+cp .env.sample .env
 make install
-cp .env.example .env
 make run
 ```
 
-Open http://localhost:8000 in your browser.
+Open http://localhost:59000 in your browser.
+
+By default, Qdrant runs in embedded mode (no separate server needed). To use an external Qdrant server instead, set `QDRANT_HOST`/`QDRANT_PORT` in `.env` and remove `QDRANT_PATH`.
 
 ## Configuration
 
@@ -191,13 +141,13 @@ Add to `~/.claude.json` under `mcpServers` (global) or in your project settings:
   "mcpServers": {
     "voitta-rag": {
       "type": "http",
-      "url": "http://localhost:58000/mcp/mcp"
+      "url": "http://localhost:59000/mcp/mcp"
     }
   }
 }
 ```
 
-> **Note:** The URL path is `/mcp/mcp` — FastMCP creates its endpoint at `/mcp` inside the app, which is itself mounted at `/mcp`. If running locally (not Docker), replace `58000` with `8000`.
+> **Note:** The URL path is `/mcp/mcp` — FastMCP creates its endpoint at `/mcp` inside the app, which is itself mounted at `/mcp`.
 
 ### Available MCP Tools
 

@@ -667,22 +667,35 @@
     </div>
 </div>
 
+<!-- Upload Progress Modal -->
+<div class="modal" id="upload-modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+        <h2>Uploading files</h2>
+        <div id="upload-status" style="font-size: 13px; color: var(--color-text-secondary); margin-bottom: var(--spacing-sm);"></div>
+        <div class="upload-progress-bar-track">
+            <div class="upload-progress-bar-fill" id="upload-progress-fill"></div>
+        </div>
+        <div id="upload-current-file" style="font-size: 12px; color: var(--color-text-tertiary); margin-top: var(--spacing-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
+    </div>
+</div>
+
 <!-- Toast Container -->
 <div class="toast-container" id="toast-container"></div>
 {% endblock %}
 
 {% block scripts %}
-<script>
-    const currentPath = "{{ current_path }}";
-    const isAnamnesis = {{ 'true' if is_anamnesis else 'false' }};
-    let currentProjectId = {{ active_project_id }};
+<script type="module">
+    import { state, initWebSocket, updateSidebar } from '/static/js/app.js';
 
-    // Initialize WebSocket connection
+    state.currentPath = "{{ current_path }}";
+    state.isAnamnesis = {{ 'true' if is_anamnesis else 'false' }};
+    state.currentProjectId = {{ active_project_id }};
+
     initWebSocket();
 
-    // Auto-load current folder stats in sidebar
-    if (currentPath) {
-        fetch(`/api/details/${encodeURIComponent(currentPath)}`)
+    if (state.currentPath) {
+        fetch(`/api/details/${encodeURIComponent(state.currentPath)}`)
             .then(r => r.json())
             .then(data => updateSidebar(data))
             .catch(() => {});
