@@ -791,6 +791,11 @@ class IndexingService:
             files_removed += 1
             logger.info(f"Removed missing file from index: {file_path}")
 
+        # Commit removals promptly so we don't hold the SQLite write lock
+        # while scanning/hashing files below.
+        if files_to_remove:
+            db.commit()
+
         # Find files to add or update (on disk but not indexed, or changed)
         for file_rel_path in actual_files:
             file_entry = self.root_path / file_rel_path

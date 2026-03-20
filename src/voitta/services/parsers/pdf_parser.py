@@ -134,15 +134,24 @@ def parse_single_pdf(file_path: Path, method: str, lang: str) -> ParserResult:
         except Exception as e:
             return ParserResult.failure(f"Failed to run MinerU: {e}")
 
-        # Parse JSON result
+        # Parse JSON result — extract last JSON object from stdout
+        # (Ultralytics/other libs may print warnings before the JSON)
+        stdout = result.stdout.strip()
+        json_start = stdout.rfind("{")
+        if json_start == -1:
+            if result.returncode != 0:
+                return ParserResult.failure(
+                    f"MinerU failed with exit code {result.returncode}: {result.stderr[:500]}"
+                )
+            return ParserResult.failure(f"No JSON found in MinerU output: {stdout[:500]}")
         try:
-            parse_result = json.loads(result.stdout.strip())
+            parse_result = json.loads(stdout[json_start:])
         except json.JSONDecodeError:
             if result.returncode != 0:
                 return ParserResult.failure(
                     f"MinerU failed with exit code {result.returncode}: {result.stderr[:500]}"
                 )
-            return ParserResult.failure(f"Failed to parse MinerU output: {result.stdout[:500]}")
+            return ParserResult.failure(f"Failed to parse MinerU output: {stdout[:500]}")
 
         if not parse_result.get("success"):
             return ParserResult.failure(
@@ -226,11 +235,6 @@ class PdfParser(BaseParser):
         if not file_path.exists():
             pdf_logger.error(f"File not found: {file_path}")
             yield ParserResult.failure(f"File not found: {file_path}")
-            return
-
-        if not MINERU_PYTHON.exists():
-            pdf_logger.error(f"MinerU venv not found at {MINERU_PYTHON}")
-            yield ParserResult.failure(f"MinerU venv not found at {MINERU_PYTHON}")
             return
 
         if not MINERU_SCRIPT.exists():
