@@ -1,6 +1,7 @@
 """Vector store service using Qdrant."""
 
 import logging
+import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -65,8 +66,20 @@ class VectorStoreService:
     def client(self) -> QdrantClient:
         """Lazy load the Qdrant client."""
         if self._client is None:
-            logger.info(f"Connecting to Qdrant at {self.host}:{self.port}")
-            self._client = QdrantClient(host=self.host, port=self.port)
+            qdrant_path = os.getenv("QDRANT_PATH")
+            has_path = bool(qdrant_path)
+            has_host = bool(os.getenv("QDRANT_HOST"))
+            if has_path == has_host:
+                raise RuntimeError(
+                    "Exactly one of QDRANT_PATH or QDRANT_HOST must be set. "
+                    "Use QDRANT_PATH for local/embedded mode or QDRANT_HOST for server mode."
+                )
+            if has_path:
+                logger.info(f"Opening local Qdrant at {qdrant_path}")
+                self._client = QdrantClient(path=qdrant_path)
+            else:
+                logger.info(f"Connecting to Qdrant at {self.host}:{self.port}")
+                self._client = QdrantClient(host=self.host, port=self.port)
             self._ensure_collection()
         return self._client
 
