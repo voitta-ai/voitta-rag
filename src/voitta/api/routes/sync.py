@@ -904,10 +904,15 @@ async def delete_sync_source(path: str, user: CurrentUser, db: DB):
 
 
 async def _run_sync(folder_path: str):
-    """Run sync in background."""
+    """Run sync in background.
+
+    DB sessions are kept short-lived to avoid holding SQLite connections/locks
+    while long-running git or network operations are in progress.
+    """
     from ...services.filesystem import FilesystemService
     from ...services.watcher import file_watcher
 
+    # Load the source config (short-lived session)
     async with get_db_context() as db:
         result = await db.execute(
             select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
@@ -915,72 +920,100 @@ async def _run_sync(folder_path: str):
         source = result.scalar_one_or_none()
         if not source:
             return
+        # Detach source so we can use it outside the session
+        await db.refresh(source)
 
-        # Suppress file watcher events for this folder during sync
-        file_watcher.suppress_path(folder_path)
-        try:
-            connector = get_connector(source.source_type)
-            fs = FilesystemService()
-            await connector.sync(source, fs)
+    sync_status = "synced"
+    sync_error = None
+    last_synced_at = utc_now()
 
-            # Post-sync: fetch Teams meeting transcripts for SharePoint sources
-            if source.source_type == "sharepoint":
-                try:
-                    from ...services.sync.teams_transcripts import fetch_transcripts_for_folder
-                    token = await connector._get_access_token(source)
-                    count = await fetch_transcripts_for_folder(source, fs, token)
-                    if count:
-                        logger.info("Fetched %d transcript(s) for %s", count, folder_path)
-                except Exception as e:
-                    logger.warning("Transcript fetch failed for %s: %s", folder_path, e)
+    # Suppress file watcher events for this folder during sync
+    file_watcher.suppress_path(folder_path)
+    try:
+        connector = get_connector(source.source_type)
+        fs = FilesystemService()
+        await connector.sync(source, fs)
 
-            # Post-sync: reconcile index with new disk state
+        # Save any source mutations (e.g. SharePoint refresh token rotation)
+        async with get_db_context() as db:
+            await db.merge(source)
+
+        # Post-sync: fetch Teams meeting transcripts for SharePoint sources
+        if source.source_type == "sharepoint":
             try:
-                from ...services.indexing import get_indexing_service
-                from sqlalchemy.orm import Session as SyncSession
+                from ...services.sync.teams_transcripts import fetch_transcripts_for_folder
+                token = await connector._get_access_token(source)
+                count = await fetch_transcripts_for_folder(source, fs, token)
+                if count:
+                    logger.info("Fetched %d transcript(s) for %s", count, folder_path)
+            except Exception as e:
+                logger.warning("Transcript fetch failed for %s: %s", folder_path, e)
 
-                indexing_service = get_indexing_service()
-                with SyncSession(get_sync_engine()) as sync_db:
-                    # Find all indexed/pending subfolders under this folder
-                    result = sync_db.execute(
-                        select(FolderIndexStatus).where(
-                            FolderIndexStatus.folder_path.startswith(folder_path),
-                            FolderIndexStatus.status.in_(["indexed", "pending"]),
-                        )
+        # Post-sync: reconcile index with new disk state
+        try:
+            from ...services.indexing import get_indexing_service
+            from sqlalchemy.orm import Session as SyncSession
+
+            indexing_service = get_indexing_service()
+            with SyncSession(get_sync_engine()) as sync_db:
+                # Find all indexed/pending subfolders under this folder
+                result = sync_db.execute(
+                    select(FolderIndexStatus).where(
+                        FolderIndexStatus.folder_path.startswith(folder_path),
+                        FolderIndexStatus.status.in_(["indexed", "pending"]),
                     )
-                    for idx_status in result.scalars().all():
+                )
+                idx_folder_paths = [s.folder_path for s in result.scalars().all()]
+
+            for fp in idx_folder_paths:
+                try:
+                    with SyncSession(get_sync_engine()) as sync_db:
                         added, removed, _ = indexing_service.sync_folder(
-                            idx_status.folder_path, sync_db
+                            fp, sync_db
                         )
                         if removed:
                             logger.info(
                                 "Post-sync cleanup [%s]: removed %d stale files",
-                                idx_status.folder_path,
+                                fp,
                                 removed,
                             )
-                    sync_db.commit()
-            except Exception as e:
-                logger.warning(
-                    "Post-sync index reconciliation failed for %s: %s",
-                    folder_path,
-                    e,
-                )
-
-            source.sync_status = "synced"
-            source.sync_error = None
-            source.last_synced_at = utc_now()
+                        sync_db.commit()
+                except Exception as e:
+                    logger.warning(
+                        "Post-sync reconciliation failed for subfolder %s: %s",
+                        fp,
+                        e,
+                    )
         except Exception as e:
-            logger.exception("Sync failed for %s", folder_path)
-            source.sync_status = "error"
-            source.sync_error = str(e)
-        finally:
-            file_watcher.unsuppress_path(folder_path)
+            logger.warning(
+                "Post-sync index reconciliation failed for %s: %s",
+                folder_path,
+                e,
+            )
 
-        # Broadcast sync status change via WebSocket
-        await file_watcher.broadcast({
-            "type": "sync_status",
-            "path": folder_path,
-            "sync_status": source.sync_status,
-            "sync_error": source.sync_error,
-            "last_synced_at": source.last_synced_at.isoformat() if source.last_synced_at else None,
-        })
+    except Exception as e:
+        logger.exception("Sync failed for %s", folder_path)
+        sync_status = "error"
+        sync_error = str(e)
+    finally:
+        file_watcher.unsuppress_path(folder_path)
+
+    # Update sync status (short-lived session)
+    async with get_db_context() as db:
+        result = await db.execute(
+            select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
+        )
+        source = result.scalar_one_or_none()
+        if source:
+            source.sync_status = sync_status
+            source.sync_error = sync_error
+            source.last_synced_at = last_synced_at
+
+    # Broadcast sync status change via WebSocket
+    await file_watcher.broadcast({
+        "type": "sync_status",
+        "path": folder_path,
+        "sync_status": sync_status,
+        "sync_error": sync_error,
+        "last_synced_at": last_synced_at.isoformat() if last_synced_at else None,
+    })

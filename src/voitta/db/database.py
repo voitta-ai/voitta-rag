@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from ..config import get_settings
 from .models import Base, Project, User
@@ -41,13 +41,17 @@ def get_async_engine() -> AsyncEngine:
 
 @lru_cache
 def get_sync_engine() -> Engine:
-    """Get or create the sync database engine."""
+    """Get or create the sync database engine.
+
+    Uses NullPool so each Session gets its own connection, avoiding
+    cross-thread contention between the indexing worker and sync tasks.
+    """
     settings = get_settings()
     engine = create_engine(
         settings.sync_database_url,
         echo=False,
         connect_args={"check_same_thread": False, "timeout": 30},
-        poolclass=StaticPool,
+        poolclass=NullPool,
     )
     event.listens_for(engine, "connect")(_set_sqlite_pragmas)
     return engine
