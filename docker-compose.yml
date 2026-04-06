@@ -1,6 +1,7 @@
 services:
   qdrant:
     image: qdrant/qdrant
+    restart: unless-stopped
     ports:
       - "6333:6333"
       - "6334:6334"
@@ -9,6 +10,7 @@ services:
 
   voitta-rag:
     build: .
+    restart: unless-stopped
     ports:
       - "${DOCKER_PORT:-58000}:8000"
     env_file: .env
