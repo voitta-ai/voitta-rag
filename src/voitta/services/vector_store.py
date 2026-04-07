@@ -37,6 +37,8 @@ class ChunkMetadata:
     source_modified_at: int | None = None
     # ACL: list of lowercase email addresses allowed to access this document
     allowed_users: list[str] | None = None
+    # Source URL: original external URL (e.g. Google Docs link) for this document
+    source_url: str | None = None
 
 
 @dataclass
@@ -81,6 +83,7 @@ class VectorStoreService:
             # Ensure indexes exist on existing collections
             self._ensure_timestamp_indexes()
             self._ensure_acl_index()
+            self._ensure_source_url_index()
         except (UnexpectedResponse, Exception):
             logger.info(f"Creating collection '{self.collection_name}'")
             self._client.create_collection(
@@ -96,7 +99,7 @@ class VectorStoreService:
                 },
             )
             # Create payload indexes for efficient filtering
-            for field in ("file_path", "folder_path", "index_folder", "allowed_users"):
+            for field in ("file_path", "folder_path", "index_folder", "allowed_users", "source_url"):
                 self._client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name=field,
@@ -141,6 +144,52 @@ class VectorStoreService:
                 logger.info(f"Created index for 'allowed_users' on '{self.collection_name}'")
         except Exception as e:
             logger.warning(f"Failed to ensure ACL index: {e}")
+
+    def _ensure_source_url_index(self) -> None:
+        """Create KEYWORD payload index for source_url if missing."""
+        try:
+            info = self._client.get_collection(self.collection_name)
+            existing = set(info.payload_schema.keys()) if info.payload_schema else set()
+            if "source_url" not in existing:
+                self._client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="source_url",
+                    field_schema=qmodels.PayloadSchemaType.KEYWORD,
+                )
+                logger.info(f"Created index for 'source_url' on '{self.collection_name}'")
+        except Exception as e:
+            logger.warning(f"Failed to ensure source_url index: {e}")
+
+    def find_by_source_url(self, source_url: str) -> list[StoredChunk]:
+        """Find all chunks matching a given source_url.
+
+        Returns chunks sorted by chunk_index, deduplicated by file_path
+        (returns only the first chunk per file to identify which files match).
+        """
+        chunks: list[StoredChunk] = []
+        offset = None
+        while True:
+            results, offset = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=100,
+                offset=offset,
+                scroll_filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(
+                            key="source_url",
+                            match=qmodels.MatchValue(value=source_url),
+                        )
+                    ]
+                ),
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in results:
+                chunks.append(self._result_to_chunk(point))
+            if offset is None:
+                break
+        chunks.sort(key=lambda c: c.metadata.chunk_index)
+        return chunks
 
     def set_file_acl(self, file_path: str, allowed_users: list[str]) -> None:
         """Update allowed_users on all chunks for a specific file."""
@@ -212,6 +261,9 @@ class VectorStoreService:
             # Add ACL if present
             if metadata.allowed_users is not None:
                 payload["allowed_users"] = metadata.allowed_users
+            # Add source URL if present
+            if metadata.source_url is not None:
+                payload["source_url"] = metadata.source_url
 
             # Build vector: unnamed dense + optional sparse
             if sparse_vectors and idx < len(sparse_vectors):
@@ -478,6 +530,7 @@ class VectorStoreService:
                 source_created_at=payload.get("source_created_at"),
                 source_modified_at=payload.get("source_modified_at"),
                 allowed_users=payload.get("allowed_users"),
+                source_url=payload.get("source_url"),
             ),
             score=result.score,
         )
@@ -884,6 +937,7 @@ class VectorStoreService:
                                     source_created_at=payload.get("source_created_at"),
                                     source_modified_at=payload.get("source_modified_at"),
                                     allowed_users=payload.get("allowed_users"),
+                                    source_url=payload.get("source_url"),
                                 ),
                                 score=None,
                             )

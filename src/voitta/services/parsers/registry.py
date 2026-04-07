@@ -6,6 +6,7 @@ from .azw3_parser import Azw3Parser
 from .base import BaseParser, ParserResult
 from .docx_parser import DocxParser
 from .epub_parser import EpubParser
+from .gdoc_parser import GdocParser
 from .pdf_parser import PdfParser
 from .pptx_parser import PptxParser
 from .text_parser import TextParser
@@ -72,6 +73,7 @@ def get_registry() -> ParserRegistry:
         _default_registry.register(Azw3Parser())
         _default_registry.register(DocxParser())
         _default_registry.register(EpubParser())
+        _default_registry.register(GdocParser())
         _default_registry.register(PdfParser())
         _default_registry.register(PptxParser())
         _default_registry.register(TextParser())

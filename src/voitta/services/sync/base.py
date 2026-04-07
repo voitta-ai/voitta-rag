@@ -19,6 +19,7 @@ class RemoteFile:
     modified_at: str  # ISO 8601
     content_hash: str | None = None
     created_at: str = ""  # ISO 8601
+    source_url: str | None = None  # Original external URL (e.g. Google Docs link)
 
 
 class BaseSyncConnector(ABC):
@@ -110,6 +111,14 @@ class BaseSyncConnector(ABC):
             if entry:
                 timestamps[rf.remote_path] = entry
         (local_root / ".voitta_timestamps.json").write_text(json.dumps(timestamps))
+
+        # Write source URLs sidecar for the indexing pipeline
+        sources = {}
+        for rf in remote_files:
+            if rf.source_url:
+                sources[rf.remote_path] = rf.source_url
+        if sources:
+            (local_root / ".voitta_sources.json").write_text(json.dumps(sources))
 
         logger.info("Sync complete for %s: %s", folder_path, stats)
         return stats
