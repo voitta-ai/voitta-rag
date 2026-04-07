@@ -35,6 +35,7 @@
 
         {% if not is_anamnesis %}
         <div class="toolbar-actions">
+            {% if not docker_mode %}
             <button class="btn btn-secondary" onclick="openCreateFolderModal()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -43,7 +44,8 @@
                 </svg>
                 New Folder
             </button>
-            <button class="btn btn-secondary" onclick="document.getElementById('file-upload').click()">
+            {% endif %}
+            <button class="btn btn-secondary" id="btn-upload" onclick="document.getElementById('file-upload').click()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
                     <polyline points="17 8 12 3 7 8"></polyline>
@@ -146,23 +148,45 @@
                 {% endif %}
             </div>
 
-            <!-- Remote Sync (only for folders) -->
+            <!-- Data Source (only for folders) -->
             <div class="sidebar-section" id="sync-source-section" style="display: none;">
-                <h3>Remote Sync</h3>
+                <h3>Data Source</h3>
 
                 <div class="form-group-compact">
                     <label for="sync-source-type" class="form-label-compact">Source</label>
-                    <select id="sync-source-type" class="sync-select" onchange="onSyncSourceTypeChange(this.value)">
-                        <option value="">Filesystem (local)</option>
-                        <option value="sharepoint">SharePoint</option>
-                        <option value="google_drive">Google Drive</option>
-                        <option value="github">Git</option>
-                        <option value="azure_devops">Azure DevOps</option>
-                        <option value="jira">Jira</option>
-                        <option value="confluence">Confluence</option>
-                        <option value="box">Box</option>
-                        <option value="glue_catalog">AWS Glue Catalog</option>
-                    </select>
+                    <div class="sync-source-row">
+                        <select id="sync-source-type" class="sync-select" onchange="onSyncSourceTypeChange(this.value)">
+                            <option value="">-- Select --</option>
+                            {% if not docker_mode %}
+                            <option value="filesystem">Filesystem (local)</option>
+                            {% endif %}
+                            <option value="sharepoint">SharePoint</option>
+                            <option value="google_drive">Google Drive</option>
+                            <option value="github">Git</option>
+                            <option value="azure_devops">Azure DevOps</option>
+                            <option value="jira">Jira</option>
+                            <option value="confluence">Confluence</option>
+                            <option value="box">Box</option>
+                            <option value="glue_catalog">AWS Glue Catalog</option>
+                        </select>
+                        <button type="button" class="info-icon-btn" id="fs-info-btn" onclick="showFsHelp()" title="How to mount local directories">
+                            <svg viewBox="0 0 20 20" fill="currentColor" width="16" height="16">
+                                <path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Filesystem Fields (local mode only) -->
+                <div id="sync-fields-filesystem" class="sync-fields" style="display: none;">
+                    <div class="form-group-compact">
+                        <label class="form-label-compact">Directory</label>
+                        <div class="fs-browser-selected" id="fs-selected-path">
+                            <span class="fs-no-selection">No directory selected</span>
+                        </div>
+                    </div>
+                    <div class="fs-browser-tree" id="fs-browser-tree"></div>
+                    <input type="hidden" id="fs-path" value="">
                 </div>
 
                 <!-- SharePoint Fields -->
@@ -621,6 +645,18 @@
     </div>
 </div>
 
+<!-- Filesystem Help Modal -->
+<div class="modal" id="fs-help-modal">
+    <div class="modal-backdrop" onclick="closeFsHelp()"></div>
+    <div class="modal-content modal-content-wide">
+        <h2 id="fs-help-title">Data Source</h2>
+        <div class="help-steps" id="fs-help-content"></div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" onclick="closeFsHelp()">Close</button>
+        </div>
+    </div>
+</div>
+
 <!-- Google Drive Credentials Help Modal -->
 <div class="modal" id="gd-credentials-help-modal">
     <div class="modal-backdrop" onclick="closeGdCredentialsHelp()"></div>
@@ -675,6 +711,8 @@
 <script>
     const currentPath = "{{ current_path }}";
     const isAnamnesis = {{ 'true' if is_anamnesis else 'false' }};
+    const dockerMode = {{ 'true' if docker_mode else 'false' }};
+    const isDockerManaged = {{ 'true' if is_docker_managed else 'false' }};
     let currentProjectId = {{ active_project_id }};
 
     // Initialize WebSocket connection

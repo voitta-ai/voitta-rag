@@ -9,11 +9,32 @@ Useful for teams and individuals who want to:
 - **Give AI assistants context** — expose your indexed knowledge to Claude Code or other MCP-compatible tools
 - **Keep everything local** — runs on your infrastructure with Qdrant for vector storage, no data leaves your network
 
+## Table of Contents
+
+- [Features](#features)
+- [Search Scope](#search-scope)
+- [Prerequisites](#prerequisites)
+  - [Python](#python)
+  - [Dependencies Note](#dependencies-note)
+- [Quick Start](#quick-start)
+  - [Option A: Docker (recommended)](#option-a-docker-recommended)
+  - [Option B: Local development](#option-b-local-development)
+- [Configuration](#configuration)
+  - [Authentication](#authentication)
+- [MCP Server (for Claude Code integration)](#mcp-server-for-claude-code-integration)
+  - [Claude Code Configuration](#claude-code-configuration)
+  - [Available MCP Tools](#available-mcp-tools)
+- [Concepts](#concepts)
+  - [Projects](#projects)
+  - [Toggle Switches](#toggle-switches)
+  - [Anamnesis](#anamnesis)
+- [Bulk Repository Import](#bulk-repository-import)
+
 ## Features
 
 - File browser with real-time updates
 - Folder creation and file upload
-- Remote sync connectors: Git, Google Drive, SharePoint, Azure DevOps, Jira, Confluence, Box
+- Data source connectors: Filesystem (local path mapping), Git, Google Drive, SharePoint, Azure DevOps, Jira, Confluence, Box
 - Jira/Confluence support for both Cloud and Server/Data Center deployments
 - Per-user search scope control per folder
 - Automatic document indexing (DOCX, PPTX, XLSX, ODT, ODP, ODS, GDOC, GSHEET, GSLIDES)
@@ -90,28 +111,30 @@ By default, `~/.ssh` is mounted read-only into the container for SSH-based git a
 SSH_KEY_DIR=/path/to/ssh/keys docker compose up -d --build
 ```
 
-#### Mounting local directories
+#### Mounting local directories (Mapped Paths)
 
-To index a local directory (e.g., Google Drive for Desktop) without using a remote sync connector, create a `docker-compose.override.yml` (gitignored, merged automatically by Docker Compose):
-
-```yaml
-services:
-  voitta-rag:
-    volumes:
-      - ~/Google Drive:/data/fs/gdrive:ro
-```
-
-The directory appears as a folder named `gdrive` in the UI. Enable indexing on it like any other folder. The file watcher detects changes automatically.
-
-You can mount multiple directories:
+In Docker mode, local directories are mounted into the container via `docker-compose.override.yml` (gitignored, merged automatically by Docker Compose). Each mounted directory appears automatically in the UI as a folder with a "Mapped Path" badge. The directory name becomes the folder name, so use descriptive names:
 
 ```yaml
 services:
   voitta-rag:
     volumes:
-      - ~/Google Drive:/data/fs/gdrive:ro
-      - ~/Dropbox/Projects:/data/fs/dropbox-projects:ro
+      - ~/Google Drive:/data/fs/Google Drive:ro
 ```
+
+The folder appears as "Google Drive" in the UI. Enable indexing on it like any other folder. The file watcher detects changes automatically.
+
+Multiple directories:
+
+```yaml
+services:
+  voitta-rag:
+    volumes:
+      - ~/Google Drive:/data/fs/Google Drive:ro
+      - ~/Dropbox/Projects:/data/fs/Dropbox Projects:ro
+```
+
+Mapped Path folders cannot be created or deleted from the UI -- they are managed entirely through volume mounts. Upload is also disabled for these folders since the source of truth is the host directory. Restart with `make docker-up` after changing mounts.
 
 Note: symlinks inside mounted volumes won't work -- Docker doesn't resolve symlink targets across mount boundaries. Use volume mounts instead.
 

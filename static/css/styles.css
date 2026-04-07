@@ -1415,8 +1415,18 @@ body:has(.browser-container) .app-main {
 }
 
 /* ============================================
-   Remote Sync
+   Data Source
    ============================================ */
+.sync-source-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.sync-source-row .sync-select {
+    flex: 1;
+}
+
 .sync-select {
     width: 100%;
     padding: var(--spacing-sm) var(--spacing-md);
@@ -1439,6 +1449,82 @@ body:has(.browser-container) .app-main {
 .sync-select:focus {
     outline: none;
     border-color: var(--color-accent);
+}
+
+/* Directory browser for filesystem source */
+.fs-browser-selected {
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-sm);
+    min-height: 32px;
+    display: flex;
+    align-items: center;
+}
+
+.fs-browser-selected code {
+    font-size: var(--font-size-sm);
+    word-break: break-all;
+}
+
+.fs-no-selection {
+    color: var(--color-text-secondary);
+    font-style: italic;
+}
+
+.fs-browser-tree {
+    max-height: 250px;
+    overflow-y: auto;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg);
+    padding: var(--spacing-xs);
+    margin-top: var(--spacing-xs);
+}
+
+.fs-tree-item {
+    font-size: var(--font-size-sm);
+}
+
+.fs-tree-row {
+    display: flex;
+    align-items: center;
+    padding: 2px 4px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+}
+
+.fs-tree-row:hover {
+    background: var(--color-hover);
+}
+
+.fs-tree-toggle {
+    width: 16px;
+    font-size: 10px;
+    text-align: center;
+    cursor: pointer;
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.fs-tree-spacer {
+    cursor: default;
+}
+
+.fs-tree-label {
+    flex: 1;
+    padding: 2px 4px;
+    border-radius: var(--radius-sm);
+}
+
+.fs-tree-label.selected {
+    background: var(--color-accent);
+    color: white;
+}
+
+.fs-tree-children {
+    padding-left: 16px;
 }
 
 /* Custom multi-select dropdown */

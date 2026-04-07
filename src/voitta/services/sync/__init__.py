@@ -3,6 +3,7 @@
 from .azure_devops import AzureDevOpsConnector
 from .base import BaseSyncConnector
 from .box import BoxConnector
+from .filesystem import FilesystemSyncConnector
 from .confluence import ConfluenceConnector
 from .github import GitHubConnector
 from .glue_catalog import GlueCatalogConnector
@@ -11,6 +12,7 @@ from .jira import JiraConnector
 from .sharepoint import SharePointConnector
 
 _connectors: dict[str, BaseSyncConnector] = {
+    "filesystem": FilesystemSyncConnector(),
     "sharepoint": SharePointConnector(),
     "google_drive": GoogleDriveConnector(),
     "github": GitHubConnector(),

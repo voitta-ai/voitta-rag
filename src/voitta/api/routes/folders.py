@@ -42,6 +42,12 @@ async def create_folder(
     fs: Filesystem,
 ):
     """Create a new folder."""
+    from ...config import get_settings
+    if get_settings().docker_mode:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Folders are managed via Docker volume mounts in Docker mode",
+        )
     target = request.path
     if target == "Anamnesis" or target.startswith("Anamnesis/"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
@@ -73,6 +79,18 @@ async def delete_folder(
     """Delete a folder and all its contents, including associated DB records."""
     if path == "Anamnesis" or path.startswith("Anamnesis/"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
+
+    # Check if Docker-managed
+    result = await db.execute(
+        select(FolderSyncSource).where(FolderSyncSource.folder_path == path)
+    )
+    sync_source = result.scalar_one_or_none()
+    if sync_source and sync_source.is_docker_managed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This folder is managed via Docker volume mounts and cannot be deleted",
+        )
+
     from ...services.watcher import file_watcher
 
     # Suppress watcher events during bulk delete

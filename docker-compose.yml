@@ -17,6 +17,7 @@ services:
     environment:
       - QDRANT_HOST=qdrant
       - VOITTA_ROOT_PATH=/data/fs
+      - VOITTA_DOCKER=true
       - VOITTA_DB_PATH=/data/voitta.db
       - VOITTA_USERS_FILE=/data/users.txt
       - HF_HOME=/root/.cache/huggingface

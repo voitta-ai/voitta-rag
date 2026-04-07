@@ -49,7 +49,8 @@ async def get_optional_user(
 
 def get_filesystem_service() -> FilesystemService:
     """Get filesystem service instance."""
-    return FilesystemService()
+    from ..services.filesystem import get_filesystem_service as _get_fs
+    return _get_fs()
 
 
 async def get_metadata_service(

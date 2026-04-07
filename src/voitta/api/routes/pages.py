@@ -340,6 +340,11 @@ async def browse(
 
     is_anamnesis = path == "Anamnesis" or path.startswith("Anamnesis/")
 
+    settings = get_settings()
+    docker_mode = settings.docker_mode
+    # Top-level folders in Docker mode are managed by volume mounts
+    is_docker_managed = docker_mode and path and "/" not in path and not is_anamnesis
+
     templates = get_templates(request)
     return templates.TemplateResponse(
         request,
@@ -357,6 +362,8 @@ async def browse(
             "projects": projects,
             "active_project_id": active_project.id,
             "is_anamnesis": is_anamnesis,
+            "docker_mode": docker_mode,
+            "is_docker_managed": is_docker_managed,
             **file_list_data,
         },
     )

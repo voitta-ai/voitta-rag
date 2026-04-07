@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.pool import StaticPool
 
 from ..config import get_settings
-from .models import Base, Project, User
+from .models import Base, FolderSyncSource, Project, User
 
 
 def _set_sqlite_pragmas(dbapi_conn, connection_record):
@@ -144,6 +144,9 @@ def init_db() -> None:
     # Create default projects and migrate search_active settings
     _migrate_projects(sync_engine)
 
+    # Auto-discover Docker volume mount folders
+    _discover_docker_folders(sync_engine)
+
     # Seed users from users.txt if enabled
     import os
     from pathlib import Path
@@ -163,6 +166,44 @@ def init_db() -> None:
                     if not existing:
                         session.add(User(name=name))
                 session.commit()
+
+
+def _discover_docker_folders(engine: Engine) -> None:
+    """Auto-create folder entries for Docker volume mounts at VOITTA_ROOT_PATH/*."""
+    import logging
+    from sqlalchemy.orm import Session
+
+    logger = logging.getLogger(__name__)
+    settings = get_settings()
+    if not settings.docker_mode:
+        return
+
+    root = settings.root_path
+    with Session(engine) as session:
+        for child in root.iterdir():
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            if child.name == "Anamnesis":
+                continue
+
+            folder_path = child.name
+            existing = session.query(FolderSyncSource).filter(
+                FolderSyncSource.folder_path == folder_path
+            ).first()
+
+            if existing:
+                existing.is_docker_managed = True
+            else:
+                source = FolderSyncSource(
+                    folder_path=folder_path,
+                    source_type="filesystem",
+                    fs_path=str(child),
+                    is_docker_managed=True,
+                )
+                session.add(source)
+                logger.info("Auto-discovered Docker folder: %s", folder_path)
+
+        session.commit()
 
 
 def reset_engines() -> None:
