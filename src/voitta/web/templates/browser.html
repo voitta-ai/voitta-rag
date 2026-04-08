@@ -35,7 +35,6 @@
 
         {% if not is_anamnesis %}
         <div class="toolbar-actions">
-            {% if not docker_mode %}
             <button class="btn btn-secondary" onclick="openCreateFolderModal()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
                     <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
@@ -44,7 +43,6 @@
                 </svg>
                 New Folder
             </button>
-            {% endif %}
             <button class="btn btn-secondary" id="btn-upload" onclick="document.getElementById('file-upload').click()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>

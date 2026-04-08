@@ -42,12 +42,6 @@ async def create_folder(
     fs: Filesystem,
 ):
     """Create a new folder."""
-    from ...config import get_settings
-    if get_settings().docker_mode:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Folders are managed via Docker volume mounts in Docker mode",
-        )
     target = request.path
     if target == "Anamnesis" or target.startswith("Anamnesis/"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")

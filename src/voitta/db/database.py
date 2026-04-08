@@ -169,7 +169,11 @@ def init_db() -> None:
 
 
 def _discover_docker_folders(engine: Engine) -> None:
-    """Auto-create folder entries for Docker volume mounts at VOITTA_ROOT_PATH/*."""
+    """Mark existing sync source entries as Docker-managed.
+
+    Does NOT create new entries — folders without a sync source are treated
+    as organizing folders. Users configure sources via the UI dropdown.
+    """
     import logging
     from sqlalchemy.orm import Session
 
@@ -179,29 +183,33 @@ def _discover_docker_folders(engine: Engine) -> None:
         return
 
     root = settings.root_path
+    root_folder_names = set()
+    for child in root.iterdir():
+        if child.is_dir() and not child.name.startswith(".") and child.name != "Anamnesis":
+            root_folder_names.add(child.name)
+
     with Session(engine) as session:
-        for child in root.iterdir():
-            if not child.is_dir() or child.name.startswith("."):
-                continue
-            if child.name == "Anamnesis":
-                continue
+        all_sources = session.query(FolderSyncSource).all()
 
-            folder_path = child.name
-            existing = session.query(FolderSyncSource).filter(
-                FolderSyncSource.folder_path == folder_path
-            ).first()
-
-            if existing:
-                existing.is_docker_managed = True
-            else:
-                source = FolderSyncSource(
-                    folder_path=folder_path,
-                    source_type="filesystem",
-                    fs_path=str(child),
-                    is_docker_managed=True,
+        # Clean up stale auto-created filesystem entries that have no real
+        # purpose (organizing folders with child sources, or folders the user
+        # never configured a source for)
+        for source in all_sources:
+            if (source.is_docker_managed
+                    and source.source_type == "filesystem"
+                    and source.folder_path in root_folder_names):
+                has_child_sources = any(
+                    s.folder_path.startswith(source.folder_path + "/")
+                    for s in all_sources
                 )
-                session.add(source)
-                logger.info("Auto-discovered Docker folder: %s", folder_path)
+                if has_child_sources:
+                    logger.info("Removing stale Docker filesystem entry (has child sources): %s", source.folder_path)
+                    session.delete(source)
+
+        # Mark remaining root-level entries as Docker-managed
+        for source in all_sources:
+            if source.folder_path in root_folder_names:
+                source.is_docker_managed = True
 
         session.commit()
 
