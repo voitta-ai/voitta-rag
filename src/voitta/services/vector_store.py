@@ -163,8 +163,7 @@ class VectorStoreService:
     def find_by_source_url(self, source_url: str) -> list[StoredChunk]:
         """Find all chunks matching a given source_url.
 
-        Returns chunks sorted by chunk_index, deduplicated by file_path
-        (returns only the first chunk per file to identify which files match).
+        Returns chunks sorted by chunk_index.
         """
         chunks: list[StoredChunk] = []
         offset = None
@@ -185,7 +184,30 @@ class VectorStoreService:
                 with_vectors=False,
             )
             for point in results:
-                chunks.append(self._result_to_chunk(point))
+                payload = point.payload
+                chunks.append(StoredChunk(
+                    id=str(point.id),
+                    text=payload["text"],
+                    metadata=ChunkMetadata(
+                        file_path=payload["file_path"],
+                        folder_path=payload["folder_path"],
+                        index_folder=payload.get("index_folder", payload["folder_path"]),
+                        file_name=payload["file_name"],
+                        chunk_index=payload["chunk_index"],
+                        total_chunks=payload["total_chunks"],
+                        start_char=payload["start_char"],
+                        end_char=payload["end_char"],
+                        indexed_at=payload["indexed_at"],
+                        start_page=payload.get("start_page"),
+                        end_page=payload.get("end_page"),
+                        source_page_count=payload.get("source_page_count"),
+                        source_created_at=payload.get("source_created_at"),
+                        source_modified_at=payload.get("source_modified_at"),
+                        allowed_users=payload.get("allowed_users"),
+                        source_url=payload.get("source_url"),
+                    ),
+                    score=None,
+                ))
             if offset is None:
                 break
         chunks.sort(key=lambda c: c.metadata.chunk_index)
