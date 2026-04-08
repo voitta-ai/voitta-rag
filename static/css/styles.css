@@ -1473,6 +1473,11 @@ body:has(.browser-container) .app-main {
     font-style: italic;
 }
 
+.fs-docker-label {
+    color: var(--color-text-secondary);
+    font-size: 0.85em;
+}
+
 .fs-browser-tree {
     max-height: 250px;
     overflow-y: auto;

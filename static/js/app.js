@@ -999,7 +999,7 @@ function onSyncSourceTypeChange(value) {
     if (value) {
         const fields = document.getElementById(`sync-fields-${value}`);
         if (fields) fields.style.display = 'block';
-        if (value === 'filesystem') initDirBrowser();
+        if (value === 'filesystem' && !dockerMode) initDirBrowser();
         document.getElementById('sync-actions').style.display = 'flex';
     } else {
         document.getElementById('sync-actions').style.display =
@@ -1020,6 +1020,13 @@ function populateSyncFields(data) {
     const select = document.getElementById('sync-source-type');
     select.value = data.source_type || '';
     select.disabled = locked;
+
+    // For Docker-managed folders, hide the source type dropdown row entirely
+    var sourceRow = select.closest('.form-group-compact');
+    if (sourceRow) {
+        sourceRow.style.display = data.is_docker_managed ? 'none' : '';
+    }
+
     onSyncSourceTypeChange(data.source_type || '');
 
     if (data.source_type === 'sharepoint' && data.sharepoint) {
@@ -1134,8 +1141,12 @@ function populateSyncFields(data) {
     } else if (data.source_type === 'filesystem' && data.filesystem) {
         document.getElementById('fs-path').value = data.filesystem.path || '';
         var selectedEl = document.getElementById('fs-selected-path');
-        if (data.filesystem.path) {
-            selectedEl.innerHTML = '<code>' + data.filesystem.path + '</code>';
+        if (data.is_docker_managed) {
+            // Docker-managed volume mount: show read-only label, hide the directory browser
+            selectedEl.innerHTML = '<span class="fs-docker-label">Docker volume mount</span>';
+            document.getElementById('fs-browser-tree').style.display = 'none';
+        } else if (data.filesystem.path) {
+            selectedEl.innerHTML = '<code>' + escapeHtml(data.filesystem.path) + '</code>';
         } else {
             selectedEl.innerHTML = '<span class="fs-no-selection">No directory selected</span>';
         }
@@ -1162,6 +1173,12 @@ function populateSyncFields(data) {
         if (removeBtn) removeBtn.style.display = 'none';
     }
 
+    // Docker-managed folders: hide all actions and sync status
+    if (data.is_docker_managed) {
+        var syncActions = document.getElementById('sync-actions');
+        if (syncActions) syncActions.style.display = 'none';
+    }
+
     updateSyncStatusDisplay(data);
 }
 
@@ -1171,6 +1188,9 @@ function clearSyncFields() {
     if (select) {
         select.value = '';
         select.disabled = false;
+        // Restore source dropdown visibility (may have been hidden for Docker-managed)
+        var sourceRow = select.closest('.form-group-compact');
+        if (sourceRow) sourceRow.style.display = '';
     }
     document.querySelectorAll('.sync-fields').forEach(el => el.style.display = 'none');
     document.querySelectorAll('.sync-input, .sync-textarea').forEach(el => {
