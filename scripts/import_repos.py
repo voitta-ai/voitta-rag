@@ -41,6 +41,9 @@ def load_dotenv():
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip()
+        # Strip inline comments (but not inside quoted values)
+        if value and value[0] not in ('"', "'"):
+            value = value.split("#")[0].strip()
         if not os.environ.get(key):
             os.environ[key] = value
 
