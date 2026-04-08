@@ -33,6 +33,13 @@ _GOOGLE_EXPORT_MAP = {
     ),
 }
 
+# Google Workspace mimeType → URL template for source_url
+_GOOGLE_URL_MAP = {
+    "application/vnd.google-apps.document": "https://docs.google.com/document/d/{file_id}/edit",
+    "application/vnd.google-apps.spreadsheet": "https://docs.google.com/spreadsheets/d/{file_id}/edit",
+    "application/vnd.google-apps.presentation": "https://docs.google.com/presentation/d/{file_id}/edit",
+}
+
 # Reverse lookup: virtual suffix → export mimeType (used by download)
 _EXPORT_SUFFIXES = {ext: mime for ext, mime in _GOOGLE_EXPORT_MAP.values()}
 
@@ -260,6 +267,8 @@ class GoogleDriveConnector(BaseSyncConnector):
                     self._list_recursive_sync(service, item["id"], item_path, files)
                 elif mime in _GOOGLE_EXPORT_MAP:
                     suffix, _ = _GOOGLE_EXPORT_MAP[mime]
+                    url_template = _GOOGLE_URL_MAP.get(mime)
+                    source_url = url_template.format(file_id=item["id"]) if url_template else None
                     files.append(
                         RemoteFile(
                             remote_path=item_path + suffix,
@@ -267,6 +276,7 @@ class GoogleDriveConnector(BaseSyncConnector):
                             modified_at=item.get("modifiedTime", ""),
                             content_hash=None,
                             created_at=item.get("createdTime", ""),
+                            source_url=source_url,
                         )
                     )
                 elif mime.startswith("application/vnd.google-apps."):

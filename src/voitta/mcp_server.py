@@ -305,6 +305,7 @@ class SearchResult(BaseModel):
     source_created_at: str | None = Field(default=None, description="When the source file was originally created")
     source_modified_at: str | None = Field(default=None, description="When the source file was last modified")
     memory_id: str | None = Field(default=None, description="Memory UUID if this result is from Anamnesis")
+    source_url: str | None = Field(default=None, description="Original external URL (e.g. Google Docs link) if available")
 
 
 class IndexedFolderInfo(BaseModel):
@@ -518,6 +519,7 @@ def search(
                 source_created_at=created,
                 source_modified_at=modified,
                 memory_id=_extract_memory_id(chunk.metadata.file_path),
+                source_url=chunk.metadata.source_url,
             )
         )
 
@@ -848,6 +850,125 @@ def get_file_uri(file_path: str) -> FileUriResult:
         file_name=full_path.name,
         size=size,
         mime_type=mime_type,
+    )
+
+
+import re as _re
+
+# URL patterns for extracting document IDs from known providers
+_URL_PATTERNS = [
+    # Google Docs/Sheets/Slides: extract the document ID from /d/{id}/
+    (_re.compile(r"https?://docs\.google\.com/(?:document|spreadsheets|presentation)/d/([^/]+)"), "google"),
+]
+
+
+def _normalize_source_url(url: str) -> str | None:
+    """Extract the canonical source_url from an external URL.
+
+    Strips query params, fragments, and normalizes to the form stored in Qdrant.
+    Returns None if the URL pattern is not recognized.
+    """
+    for pattern, provider in _URL_PATTERNS:
+        m = pattern.search(url)
+        if not m:
+            continue
+        doc_id = m.group(1)
+        if provider == "google":
+            # Determine doc type from URL path
+            if "/document/" in url:
+                retval = f"https://docs.google.com/document/d/{doc_id}/edit"
+            elif "/spreadsheets/" in url:
+                retval = f"https://docs.google.com/spreadsheets/d/{doc_id}/edit"
+            elif "/presentation/" in url:
+                retval = f"https://docs.google.com/presentation/d/{doc_id}/edit"
+            else:
+                retval = None
+            return retval
+    return None
+
+
+class ResolveUrlResult(BaseModel):
+    """Result of resolving an external URL to indexed content."""
+
+    success: bool = Field(description="Whether the URL was resolved to indexed content")
+    url: str = Field(description="The URL that was resolved")
+    normalized_url: str | None = Field(default=None, description="Canonical form of the URL used for lookup")
+    file_path: str | None = Field(default=None, description="Path to the indexed file")
+    file_name: str | None = Field(default=None, description="Name of the indexed file")
+    content: str | None = Field(default=None, description="Full text content of the file")
+    chunk_count: int | None = Field(default=None, description="Number of chunks for this file")
+    error: str | None = Field(default=None, description="Error message if resolution failed")
+
+
+@mcp.tool()
+def resolve_url(url: str) -> ResolveUrlResult:
+    """Resolve an external URL (Google Docs, Sheets, Slides) to indexed content.
+
+    Use this when you have a URL to a document and want to retrieve its
+    indexed content from voitta-rag. The tool extracts the document identifier
+    from the URL, finds matching indexed chunks by source_url, and returns
+    the full file content.
+
+    Args:
+        url: External URL to resolve (e.g. https://docs.google.com/document/d/.../edit)
+
+    Returns:
+        The resolved file content, or an error if not found.
+    """
+    normalized = _normalize_source_url(url)
+    if not normalized:
+        return ResolveUrlResult(
+            success=False,
+            url=url,
+            error="URL pattern not recognized. Supported: Google Docs, Sheets, Slides.",
+        )
+
+    vector_store = get_vector_store()
+    chunks = vector_store.find_by_source_url(normalized)
+
+    if not chunks:
+        return ResolveUrlResult(
+            success=False,
+            url=url,
+            normalized_url=normalized,
+            error="No indexed content found for this URL. The document may not be indexed yet.",
+        )
+
+    # Group by file_path, pick the one with most chunks (fullest content)
+    files: dict[str, list] = {}
+    for chunk in chunks:
+        fp = chunk.metadata.file_path
+        if fp not in files:
+            files[fp] = []
+        files[fp].append(chunk)
+
+    best_file_path = max(files, key=lambda fp: len(files[fp]))
+    best_chunks = sorted(files[best_file_path], key=lambda c: c.metadata.chunk_index)
+    file_name = best_chunks[0].metadata.file_name
+
+    # Try to get full content by re-parsing from disk (like get_file does)
+    settings_obj = get_settings()
+    abs_path = settings_obj.root_path / best_file_path
+
+    if abs_path.exists():
+        parse_result = parse_file(abs_path)
+        if parse_result.success:
+            content = parse_result.content
+        else:
+            # Fall back to concatenating chunks
+            content = "\n".join(c.text for c in best_chunks)
+    else:
+        # File not on disk, concatenate chunks
+        content = "\n".join(c.text for c in best_chunks)
+
+    return ResolveUrlResult(
+        success=True,
+        url=url,
+        normalized_url=normalized,
+        file_path=best_file_path,
+        file_name=file_name,
+        content=content,
+        chunk_count=len(best_chunks),
     )
 
 

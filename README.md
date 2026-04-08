@@ -16,9 +16,10 @@ Useful for teams and individuals who want to:
 - Remote sync connectors: Git, Google Drive, SharePoint, Azure DevOps, Jira, Confluence, Box
 - Jira/Confluence support for both Cloud and Server/Data Center deployments
 - Per-user search scope control per folder
-- Automatic document indexing (DOCX, PPTX, XLSX, ODT, ODP, ODS)
+- Automatic document indexing (DOCX, PPTX, XLSX, ODT, ODP, ODS, GDOC, GSHEET, GSLIDES)
 - Vector search with Qdrant (hybrid semantic + keyword, with time range filtering)
 - MCP server for Claude Code integration
+- Source URL resolution: resolve Google Docs/Sheets/Slides URLs to indexed content via MCP
 - Anamnesis: persistent RAG memory for AI assistants (create, retrieve, like/dislike memories)
 - File change detection via content hashing
 - Global file/folder metadata
@@ -208,6 +209,7 @@ Add to `~/.claude.json` under `mcpServers` (global) or in your project settings:
 | **`get_file`** | Get full content of an indexed file |
 | **`get_chunk_range`** | Get a range of chunks from a file, merged with overlaps removed |
 | **`get_file_uri`** | Get a download URI for a file (for use with wget/curl) |
+| **`resolve_url`** | Resolve an external URL (Google Docs, Sheets, Slides) to indexed content |
 | **`set_folder_active`** | Set folder visibility for search (requires `X-User-Name` header) |
 | **`get_folder_active_states`** | Get active/inactive state of all folders for current user |
 | **`create_memory`** | Create a persistent memory entry (Anamnesis) |

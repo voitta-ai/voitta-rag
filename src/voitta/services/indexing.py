@@ -143,6 +143,37 @@ def _load_acl(file_path: str, abs_path: Path) -> list[str] | None:
     return None
 
 
+def _load_source_url(file_path: str, abs_path: Path) -> str | None:
+    """Load source URL for a file.
+
+    Checks two sources in order:
+    1. .voitta_sources.json sidecar (written by remote sync connectors)
+    2. Parser metadata (e.g. .gdoc stubs set source_url during parsing)
+
+    Returns:
+        Source URL string or None if not available.
+    """
+    current = abs_path.parent
+    while True:
+        sidecar = current / ".voitta_sources.json"
+        if sidecar.exists():
+            try:
+                data = json.loads(sidecar.read_text())
+                rel_from_sidecar = str(abs_path.relative_to(current))
+                url = data.get(rel_from_sidecar)
+                if url:
+                    return url
+            except Exception:
+                pass
+            break
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    return None
+
+
 class IndexingService:
     """Service for indexing documents into the vector store."""
 
@@ -284,9 +315,10 @@ class IndexingService:
         """Index a PDF using bucketed processing - parse and store incrementally."""
         idx_logger.info(f"[INDEX] Using BUCKETED PDF processing for: {file_path}")
 
-        # Load source timestamps and ACL
+        # Load source timestamps, ACL, and source URL
         source_created_at, source_modified_at = _load_source_timestamps(file_path, abs_path)
         allowed_users = _load_acl(file_path, abs_path)
+        source_url = _load_source_url(file_path, abs_path)
 
         parser = PdfParser()
         file_name = abs_path.name
@@ -388,6 +420,7 @@ class IndexingService:
                         source_created_at=source_created_at,
                         source_modified_at=source_modified_at,
                         allowed_users=allowed_users,
+                        source_url=source_url,
                     )
                     chunk_data.append((chunk.text, embedding, metadata))
 
@@ -451,9 +484,10 @@ class IndexingService:
         """Standard indexing for non-PDF files."""
         idx_logger.info(f"[INDEX] Using STANDARD processing for: {file_path}")
 
-        # Load source timestamps and ACL
+        # Load source timestamps, ACL, and source URL
         source_created_at, source_modified_at = _load_source_timestamps(file_path, abs_path)
         allowed_users = _load_acl(file_path, abs_path)
+        source_url = _load_source_url(file_path, abs_path)
 
         # Parse the file
         try:
@@ -465,6 +499,10 @@ class IndexingService:
         if not parse_result.success:
             idx_logger.error(f"[INDEX] Parse FAILED: {parse_result.error}")
             return False, 0
+
+        # Parser metadata may carry source_url (e.g. .gdoc stubs)
+        if not source_url and parse_result.metadata.get("source_url"):
+            source_url = parse_result.metadata["source_url"]
 
         idx_logger.info(f"[INDEX] Parse SUCCESS: {len(parse_result.content)} chars")
 
@@ -513,6 +551,7 @@ class IndexingService:
                 source_created_at=source_created_at,
                 source_modified_at=source_modified_at,
                 allowed_users=allowed_users,
+                source_url=source_url,
             )
             chunk_data.append((chunk.text, embedding, metadata))
 
