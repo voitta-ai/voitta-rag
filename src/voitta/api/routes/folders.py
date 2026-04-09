@@ -40,11 +40,24 @@ async def create_folder(
     request: CreateFolderRequest,
     user: CurrentUser,
     fs: Filesystem,
+    db: DB,
 ):
     """Create a new folder."""
     target = request.path
     if target == "Anamnesis" or target.startswith("Anamnesis/"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
+
+    # Prevent creating subfolders inside a source-connected folder
+    if target:
+        result = await db.execute(
+            select(FolderSyncSource).where(FolderSyncSource.folder_path == target)
+        )
+        parent_source = result.scalar_one_or_none()
+        if parent_source:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot create subfolders inside a source-connected folder",
+            )
     try:
         info = fs.create_folder(request.path, request.name)
         return FolderItemResponse(

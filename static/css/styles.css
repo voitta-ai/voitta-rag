@@ -552,7 +552,7 @@ body:has(.browser-container) .app-main {
 .browser-layout {
     display: grid;
     grid-template-columns: 1fr 320px;
-    grid-template-rows: 1fr;
+    grid-template-rows: minmax(0, 1fr);
     gap: var(--spacing-lg);
     flex: 1;
     min-height: 0;
@@ -1094,6 +1094,7 @@ body:has(.browser-container) .app-main {
     gap: var(--spacing-lg);
     overflow-y: auto;
     min-height: 0;
+    max-height: 100%;
     scrollbar-width: thin;
     scrollbar-color: var(--color-border) transparent;
 }
@@ -1479,7 +1480,7 @@ body:has(.browser-container) .app-main {
 }
 
 .fs-browser-tree {
-    max-height: 250px;
+    max-height: 150px;
     overflow-y: auto;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-md);
