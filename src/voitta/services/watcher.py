@@ -40,16 +40,24 @@ class FileEvent:
 class FileWatcherHandler(FileSystemEventHandler):
     """Handler for filesystem events."""
 
-    def __init__(self, root: Path, callback: Callable[[FileEvent], None]):
+    def __init__(self, root: Path, callback: Callable[[FileEvent], None], folder_prefix: str = ""):
         self.root = root
         self.callback = callback
+        self.folder_prefix = folder_prefix  # e.g., "my-gdrive" for mapped paths
 
     def _to_relative(self, path: str) -> str:
-        """Convert absolute path to relative."""
+        """Convert absolute path to relative, prepending folder_prefix for mapped paths."""
         try:
-            return str(Path(path).relative_to(self.root))
+            rel = str(Path(path).relative_to(self.root))
         except ValueError:
-            return path
+            rel = path
+        if self.folder_prefix:
+            if rel == ".":
+                retval = self.folder_prefix
+            else:
+                retval = f"{self.folder_prefix}/{rel}"
+            return retval
+        return rel
 
     def _create_event(
         self, event_type: EventType, event: FileSystemEvent, dest_path: str | None = None
@@ -103,6 +111,7 @@ class FileWatcher:
         self._pending_dirs: set[str] = set()
         self._pending_dirs_lock = threading.Lock()
         self._dir_timer: threading.Timer | None = None
+        self._fs_watches: dict[str, object] = {}  # folder_name -> ObservedWatch
 
     def suppress_path(self, path: str) -> None:
         """Suppress watcher-side deletion handling for a path (bulk delete in progress)."""
@@ -283,6 +292,30 @@ class FileWatcher:
             return
         asyncio.run_coroutine_threadsafe(self.broadcast(data), self._loop)
 
+    def add_watch(self, folder_name: str, fs_path: Path) -> None:
+        """Add a watch for a filesystem-source mapped path."""
+        if self.observer is None:
+            return
+        if folder_name in self._fs_watches:
+            return
+        if not fs_path.is_dir():
+            logger.warning("Cannot watch non-existent path: %s", fs_path)
+            return
+        handler = FileWatcherHandler(fs_path, self._on_event, folder_prefix=folder_name)
+        watch = self.observer.schedule(handler, str(fs_path), recursive=True)
+        self._fs_watches[folder_name] = watch
+        logger.info("Added filesystem watch: %s -> %s", folder_name, fs_path)
+
+    def remove_watch(self, folder_name: str) -> None:
+        """Remove a watch for a filesystem-source mapped path."""
+        watch = self._fs_watches.pop(folder_name, None)
+        if watch and self.observer:
+            try:
+                self.observer.unschedule(watch)
+                logger.info("Removed filesystem watch: %s", folder_name)
+            except Exception:
+                pass
+
     def start(self, loop: asyncio.AbstractEventLoop):
         """Start watching the filesystem."""
         if self.observer is not None:
@@ -293,6 +326,13 @@ class FileWatcher:
         self.observer = Observer()
         self.observer.schedule(handler, str(self.root), recursive=True)
         self.observer.start()
+
+        # Add watches for existing filesystem-source mappings
+        from .filesystem import get_filesystem_service
+        fs = get_filesystem_service()
+        fs.load_fs_mappings()
+        for folder_name, mapped_path in fs.get_fs_mappings().items():
+            self.add_watch(folder_name, mapped_path)
 
     def stop(self):
         """Stop watching the filesystem."""

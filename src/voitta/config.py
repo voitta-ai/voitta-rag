@@ -63,6 +63,9 @@ class Settings:
             "VOITTA_BASE_URL", f"http://localhost:{self.port}"
         )
 
+        # Docker mode — set VOITTA_DOCKER=true in docker-compose.yml
+        self.docker_mode: bool = os.getenv("VOITTA_DOCKER", "false").lower() == "true"
+
         # MCP server settings
         self.mcp_port: int = int(os.getenv("MCP_PORT", "8001"))
         self.mcp_transport: str = os.getenv("MCP_TRANSPORT", "streamable-http")  # streamable-http or sse

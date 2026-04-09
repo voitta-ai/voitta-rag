@@ -976,7 +976,7 @@ function escapeHtml(text) {
 }
 
 // ============================================
-// Remote Sync
+// Data Source / Sync
 // ============================================
 
 let currentSyncSource = null;
@@ -987,9 +987,19 @@ let currentFolderIsEmpty = true;
 function onSyncSourceTypeChange(value) {
     document.querySelectorAll('.sync-fields').forEach(el => el.style.display = 'none');
 
+    var fsInfoBtn = document.getElementById('fs-info-btn');
+    if (fsInfoBtn) fsInfoBtn.style.display = (!value) ? '' : 'none';
+
+    // Hide upload button for filesystem-backed folders
+    var uploadBtn = document.getElementById('btn-upload');
+    if (uploadBtn) {
+        uploadBtn.style.display = (value === 'filesystem' || (typeof isDockerManaged !== 'undefined' && isDockerManaged)) ? 'none' : '';
+    }
+
     if (value) {
         const fields = document.getElementById(`sync-fields-${value}`);
         if (fields) fields.style.display = 'block';
+        if (value === 'filesystem' && !dockerMode) initDirBrowser();
         document.getElementById('sync-actions').style.display = 'flex';
     } else {
         document.getElementById('sync-actions').style.display =
@@ -1010,6 +1020,7 @@ function populateSyncFields(data) {
     const select = document.getElementById('sync-source-type');
     select.value = data.source_type || '';
     select.disabled = locked;
+
     onSyncSourceTypeChange(data.source_type || '');
 
     if (data.source_type === 'sharepoint' && data.sharepoint) {
@@ -1121,6 +1132,19 @@ function populateSyncFields(data) {
         document.getElementById('glue-catalog-id').value = data.glue_catalog.catalog_id || '';
         document.getElementById('glue-databases').value = data.glue_catalog.databases || '';
         toggleGlueAuth();
+    } else if (data.source_type === 'filesystem' && data.filesystem) {
+        document.getElementById('fs-path').value = data.filesystem.path || '';
+        var selectedEl = document.getElementById('fs-selected-path');
+        if (data.is_docker_managed) {
+            // Docker-managed volume mount: show read-only label with container path
+            var pathDisplay = data.filesystem.path ? '<code>' + escapeHtml(data.filesystem.path) + '</code>' : '';
+            selectedEl.innerHTML = '<span class="fs-docker-label">Docker volume mount</span>' + pathDisplay;
+            document.getElementById('fs-browser-tree').style.display = 'none';
+        } else if (data.filesystem.path) {
+            selectedEl.innerHTML = '<code>' + escapeHtml(data.filesystem.path) + '</code>';
+        } else {
+            selectedEl.innerHTML = '<span class="fs-no-selection">No directory selected</span>';
+        }
     }
 
     // Re-enable all inputs for unlocked sources (clearSyncFields handles most,
@@ -1334,6 +1358,13 @@ function gatherSyncConfig() {
             catalog_id: document.getElementById('glue-catalog-id').value.trim(),
             databases: document.getElementById('glue-databases').value.trim(),
         };
+    } else if (sourceType === 'filesystem') {
+        var fsPathVal = document.getElementById('fs-path').value.trim();
+        if (!fsPathVal) {
+            showToast('Please select a directory', 'error');
+            return null;
+        }
+        config.filesystem = { path: fsPathVal };
     }
 
     return config;
@@ -2116,6 +2147,127 @@ function updateGdConnectStatus(connected) {
         el.className = 'sp-connect-status not-connected';
         el.textContent = 'Not connected';
         if (btn) btn.textContent = 'Connect';
+    }
+}
+
+function showFsHelp() {
+    var titleEl = document.getElementById('fs-help-title');
+    var contentEl = document.getElementById('fs-help-content');
+    var folderPath = selectedPath || currentPath;
+    var folderName = folderPath ? folderPath.split('/').filter(Boolean)[0] : 'my-folder';
+
+    if (typeof dockerMode !== 'undefined' && dockerMode) {
+        titleEl.textContent = 'Mapped Path';
+        contentEl.innerHTML =
+            '<p>This folder is automatically managed via a Docker volume mount.</p>' +
+            '<p>The folder <strong>' + folderName + '</strong> maps to <code>/data/fs/' + folderName + '</code> inside the container.</p>' +
+            '<p>To change what is mounted here, edit <code>docker-compose.override.yml</code> and restart with <code>make docker-up</code>.</p>';
+    } else {
+        titleEl.textContent = 'Data Source';
+        contentEl.innerHTML =
+            '<p>No data source is configured for this folder. You can:</p>' +
+            '<ul>' +
+            '<li><strong>Upload files</strong> using the upload button</li>' +
+            '<li><strong>Select Filesystem</strong> from the dropdown to map this folder to a local directory</li>' +
+            '<li><strong>Select a remote source</strong> (Git, Google Drive, SharePoint, etc.)</li>' +
+            '</ul>';
+    }
+    document.getElementById('fs-help-modal').classList.add('active');
+}
+
+function closeFsHelp() {
+    document.getElementById('fs-help-modal').classList.remove('active');
+}
+
+// --- Directory browser for filesystem source ---
+
+async function loadDirTree(parentPath, containerEl) {
+    try {
+        var resp = await fetch('/api/sync/browse-host-dirs?path=' + encodeURIComponent(parentPath));
+        if (!resp.ok) {
+            var err = await resp.json();
+            showToast(err.detail || 'Failed to list directories', 'error');
+            return;
+        }
+        var dirs = await resp.json();
+        containerEl.innerHTML = '';
+        for (var i = 0; i < dirs.length; i++) {
+            var dir = dirs[i];
+            var item = document.createElement('div');
+            item.className = 'fs-tree-item';
+            item.dataset.path = dir.path;
+            item.dataset.hasChildren = dir.has_children ? '1' : '0';
+
+            var row = document.createElement('div');
+            row.className = 'fs-tree-row';
+
+            if (dir.has_children) {
+                var toggle = document.createElement('span');
+                toggle.className = 'fs-tree-toggle';
+                toggle.textContent = '\u25B6';
+                toggle.onclick = (function(itm) { return function(e) { e.stopPropagation(); toggleDirExpand(itm); }; })(item);
+                row.appendChild(toggle);
+            } else {
+                var spacer = document.createElement('span');
+                spacer.className = 'fs-tree-toggle fs-tree-spacer';
+                row.appendChild(spacer);
+            }
+
+            var label = document.createElement('span');
+            label.className = 'fs-tree-label';
+            label.textContent = dir.name;
+            label.onclick = (function(d) { return function() { selectFsDir(d.path, d.name); }; })(dir);
+            row.appendChild(label);
+
+            item.appendChild(row);
+
+            var children = document.createElement('div');
+            children.className = 'fs-tree-children';
+            children.style.display = 'none';
+            item.appendChild(children);
+
+            containerEl.appendChild(item);
+        }
+    } catch (e) {
+        showToast('Failed to browse directories', 'error');
+    }
+}
+
+function toggleDirExpand(item) {
+    var children = item.querySelector('.fs-tree-children');
+    var toggle = item.querySelector('.fs-tree-toggle');
+    if (children.style.display === 'none') {
+        children.style.display = 'block';
+        toggle.textContent = '\u25BC';
+        if (children.children.length === 0) {
+            loadDirTree(item.dataset.path, children);
+        }
+    } else {
+        children.style.display = 'none';
+        toggle.textContent = '\u25B6';
+    }
+}
+
+function selectFsDir(path, name) {
+    document.getElementById('fs-path').value = path;
+    var selectedEl = document.getElementById('fs-selected-path');
+    selectedEl.innerHTML = '<code>' + path + '</code>';
+    // Highlight selected
+    document.querySelectorAll('.fs-tree-label.selected').forEach(function(el) { el.classList.remove('selected'); });
+    document.querySelectorAll('.fs-tree-label').forEach(function(el) {
+        if (el.textContent === name) el.classList.add('selected');
+    });
+}
+
+function initDirBrowser() {
+    var tree = document.getElementById('fs-browser-tree');
+    if (tree) {
+        var startPath = '/';
+        // On macOS, start from /Users for convenience
+        if (navigator.platform && navigator.platform.indexOf('Mac') !== -1) {
+            startPath = '/Users';
+        }
+        loadDirTree(startPath, tree);
     }
 }
 

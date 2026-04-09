@@ -340,6 +340,19 @@ async def browse(
 
     is_anamnesis = path == "Anamnesis" or path.startswith("Anamnesis/")
 
+    # Check if current folder has a sync source (prevents subfolder creation)
+    has_sync_source = False
+    if path:
+        result = await db.execute(
+            select(FolderSyncSource).where(FolderSyncSource.folder_path == path)
+        )
+        has_sync_source = result.scalar_one_or_none() is not None
+
+    settings = get_settings()
+    docker_mode = settings.docker_mode
+    # Top-level folders in Docker mode are managed by volume mounts
+    is_docker_managed = docker_mode and path and "/" not in path and not is_anamnesis
+
     templates = get_templates(request)
     return templates.TemplateResponse(
         request,
@@ -357,6 +370,9 @@ async def browse(
             "projects": projects,
             "active_project_id": active_project.id,
             "is_anamnesis": is_anamnesis,
+            "docker_mode": docker_mode,
+            "is_docker_managed": is_docker_managed,
+            "has_sync_source": has_sync_source,
             **file_list_data,
         },
     )

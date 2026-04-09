@@ -139,7 +139,7 @@ class FolderSyncSource(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     folder_path: Mapped[str] = mapped_column(String(1000), unique=True, nullable=False, index=True)
-    # source_type: "sharepoint", "google_drive", "github", "azure_devops"
+    # source_type: "filesystem", "sharepoint", "google_drive", "github", "azure_devops", etc.
     source_type: Mapped[str] = mapped_column(String(20), nullable=False)
 
     # SharePoint credentials
@@ -205,6 +205,10 @@ class FolderSyncSource(Base):
     glue_secret_access_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
     glue_catalog_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     glue_databases: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    # Filesystem connector (local path mapping)
+    fs_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    is_docker_managed: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
 
     # Sync status tracking
     sync_status: Mapped[str] = mapped_column(String(20), default="idle")

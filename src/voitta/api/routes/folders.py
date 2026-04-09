@@ -40,11 +40,24 @@ async def create_folder(
     request: CreateFolderRequest,
     user: CurrentUser,
     fs: Filesystem,
+    db: DB,
 ):
     """Create a new folder."""
     target = request.path
     if target == "Anamnesis" or target.startswith("Anamnesis/"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
+
+    # Prevent creating subfolders inside a source-connected folder
+    if target:
+        result = await db.execute(
+            select(FolderSyncSource).where(FolderSyncSource.folder_path == target)
+        )
+        parent_source = result.scalar_one_or_none()
+        if parent_source:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot create subfolders inside a source-connected folder",
+            )
     try:
         info = fs.create_folder(request.path, request.name)
         return FolderItemResponse(
@@ -73,6 +86,18 @@ async def delete_folder(
     """Delete a folder and all its contents, including associated DB records."""
     if path == "Anamnesis" or path.startswith("Anamnesis/"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
+
+    # Check if Docker-managed
+    result = await db.execute(
+        select(FolderSyncSource).where(FolderSyncSource.folder_path == path)
+    )
+    sync_source = result.scalar_one_or_none()
+    if sync_source and sync_source.is_docker_managed:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This folder is managed via Docker volume mounts and cannot be deleted",
+        )
+
     from ...services.watcher import file_watcher
 
     # Suppress watcher events during bulk delete

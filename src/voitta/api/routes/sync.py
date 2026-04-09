@@ -95,6 +95,10 @@ class GlueCatalogConfig(BaseModel):
     databases: str = ""  # comma-separated or "*" for all
 
 
+class FilesystemConfig(BaseModel):
+    path: str  # Absolute path to source directory
+
+
 class UpsertSyncSourceRequest(BaseModel):
     source_type: str
     sharepoint: SharePointConfig | None = None
@@ -105,6 +109,7 @@ class UpsertSyncSourceRequest(BaseModel):
     confluence: ConfluenceConfig | None = None
     box: BoxConfig | None = None
     glue_catalog: GlueCatalogConfig | None = None
+    filesystem: FilesystemConfig | None = None
 
 
 class SyncSourceResponse(BaseModel):
@@ -113,6 +118,7 @@ class SyncSourceResponse(BaseModel):
     sync_status: str
     sync_error: str | None = None
     last_synced_at: str | None = None
+    is_docker_managed: bool = False
     sharepoint: SharePointConfig | None = None
     google_drive: GoogleDriveConfig | None = None
     github: GitHubConfig | None = None
@@ -121,6 +127,7 @@ class SyncSourceResponse(BaseModel):
     confluence: ConfluenceConfig | None = None
     box: BoxConfig | None = None
     glue_catalog: GlueCatalogConfig | None = None
+    filesystem: FilesystemConfig | None = None
 
 
 class SyncStatusResponse(BaseModel):
@@ -147,8 +154,11 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
     jira = None
     confluence = None
     box = None
+    fs = None
 
-    if source.source_type == "sharepoint":
+    if source.source_type == "filesystem":
+        fs = FilesystemConfig(path=source.fs_path or "")
+    elif source.source_type == "sharepoint":
         sp = SharePointConfig(
             tenant_id=source.sp_tenant_id or "",
             client_id=source.sp_client_id or "",
@@ -223,12 +233,13 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
             databases=source.glue_databases or "",
         )
 
-    return SyncSourceResponse(
+    retval = SyncSourceResponse(
         folder_path=source.folder_path,
         source_type=source.source_type,
         sync_status=source.sync_status or "idle",
         sync_error=source.sync_error,
         last_synced_at=source.last_synced_at.isoformat() if source.last_synced_at else None,
+        is_docker_managed=bool(source.is_docker_managed),
         sharepoint=sp,
         google_drive=gd,
         github=gh,
@@ -237,7 +248,9 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
         confluence=confluence,
         box=box,
         glue_catalog=glue_catalog if source.source_type == "glue_catalog" else None,
+        filesystem=fs,
     )
+    return retval
 
 
 def _is_folder_empty(fs: Filesystem, path: str) -> bool:
@@ -587,6 +600,65 @@ async def list_sharepoint_sites(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# --- Browse host directories (local mode only) ---
+
+
+class HostDirEntry(BaseModel):
+    name: str
+    path: str
+    has_children: bool
+
+
+@router.get("/browse-host-dirs")
+async def browse_host_dirs(
+    user: CurrentUser,
+    path: str = Query("/", description="Absolute directory path to list"),
+):
+    """List directories on the host filesystem for the directory browser.
+
+    Only available in local mode (not Docker).
+    """
+    settings = get_settings()
+    if settings.docker_mode:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Directory browsing is not available in Docker mode",
+        )
+
+    from pathlib import Path as FsPath
+    target = FsPath(path).expanduser().resolve()
+    if not target.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Directory not found: {path}",
+        )
+
+    entries = []
+    try:
+        for child in sorted(target.iterdir(), key=lambda x: x.name.lower()):
+            if not child.is_dir() or child.name.startswith("."):
+                continue
+            try:
+                has_children = any(
+                    c.is_dir() and not c.name.startswith(".")
+                    for c in child.iterdir()
+                )
+            except PermissionError:
+                has_children = False
+            entries.append(HostDirEntry(
+                name=child.name,
+                path=str(child),
+                has_children=has_children,
+            ))
+    except PermissionError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission denied: {path}",
+        )
+
+    return entries
+
+
 # --- CRUD + sync endpoints ---
 
 
@@ -741,7 +813,7 @@ async def upsert_sync_source(
             detail="Sync can only be configured on empty folders",
         )
 
-    if request.source_type not in ("sharepoint", "google_drive", "github", "azure_devops", "jira", "confluence", "box", "glue_catalog"):
+    if request.source_type not in ("filesystem", "sharepoint", "google_drive", "github", "azure_devops", "jira", "confluence", "box", "glue_catalog"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Unknown source type: {request.source_type}",
@@ -772,6 +844,7 @@ async def upsert_sync_source(
         "box_client_id", "box_client_secret", "box_folder_id",
         "glue_region", "glue_profile", "glue_access_key_id", "glue_secret_access_key",
         "glue_catalog_id", "glue_databases",
+        "fs_path",
     ):
         setattr(source, field, None)
     # Clear OAuth tokens only when source type changes (they are set by the
@@ -877,6 +950,20 @@ async def upsert_sync_source(
             source.glue_profile = request.glue_catalog.profile or None
             source.glue_access_key_id = None
             source.glue_secret_access_key = None
+    elif request.source_type == "filesystem" and request.filesystem:
+        from pathlib import Path as FsPath
+        fs_path = FsPath(request.filesystem.path).expanduser().resolve()
+        if not fs_path.is_dir():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Directory not found: {request.filesystem.path}",
+            )
+        source.fs_path = str(fs_path)
+        # Update live path mapping and watcher
+        from ...services.filesystem import get_filesystem_service as _get_fs
+        from ...services.watcher import file_watcher
+        _get_fs().set_fs_mapping(path, fs_path)
+        file_watcher.add_watch(path, fs_path)
 
     await db.flush()
     return _to_response(source)
@@ -920,7 +1007,8 @@ async def _run_sync(folder_path: str):
         file_watcher.suppress_path(folder_path)
         try:
             connector = get_connector(source.source_type)
-            fs = FilesystemService()
+            from ...services.filesystem import get_filesystem_service as _get_fs
+            fs = _get_fs()
             await connector.sync(source, fs)
 
             # Post-sync: fetch Teams meeting transcripts for SharePoint sources

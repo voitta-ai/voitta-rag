@@ -1,6 +1,6 @@
 """Filesystem operations service."""
 
-import os
+import logging
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import BinaryIO
 
 from ..config import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -28,14 +30,73 @@ class FilesystemService:
     def __init__(self):
         self.settings = get_settings()
         self.root = self.settings.root_path
+        # fs_path mappings: folder_name -> absolute Path
+        self._fs_mappings: dict[str, Path] = {}
+
+    def load_fs_mappings(self) -> None:
+        """Load filesystem source path mappings from the database."""
+        from ..db.database import get_sync_engine
+        from ..db.models import FolderSyncSource
+        from sqlalchemy.orm import Session
+
+        engine = get_sync_engine()
+        with Session(engine) as session:
+            sources = session.query(FolderSyncSource).filter(
+                FolderSyncSource.source_type == "filesystem",
+                FolderSyncSource.fs_path.isnot(None),
+            ).all()
+            self._fs_mappings = {}
+            for source in sources:
+                self._fs_mappings[source.folder_path] = Path(source.fs_path)
+        logger.info("Loaded %d filesystem path mappings", len(self._fs_mappings))
+
+    def set_fs_mapping(self, folder_path: str, fs_path: Path) -> None:
+        """Add or update a single filesystem path mapping (called on save)."""
+        self._fs_mappings[folder_path] = fs_path
+
+    def remove_fs_mapping(self, folder_path: str) -> None:
+        """Remove a filesystem path mapping (called on delete)."""
+        self._fs_mappings.pop(folder_path, None)
+
+    def get_fs_mappings(self) -> dict[str, Path]:
+        """Return current filesystem path mappings."""
+        return dict(self._fs_mappings)
+
+    def _get_top_folder(self, relative_path: str) -> str:
+        """Extract the top-level folder name from a relative path."""
+        clean = relative_path.lstrip("/")
+        parts = clean.split("/", 1)
+        retval = parts[0] if parts else ""
+        return retval
 
     def _resolve_path(self, relative_path: str) -> Path:
-        """Resolve a relative path to absolute, ensuring it's within root."""
+        """Resolve a relative path to absolute.
+
+        For filesystem-source folders, resolves via the mapped fs_path.
+        Otherwise resolves within the root directory.
+        """
         if not relative_path or relative_path == "/":
             return self.root
 
-        # Normalize and resolve
         clean_path = relative_path.lstrip("/")
+        top_folder = self._get_top_folder(clean_path)
+
+        # Check if this folder has a filesystem source mapping
+        if top_folder in self._fs_mappings:
+            mapped_root = self._fs_mappings[top_folder]
+            parts = clean_path.split("/", 1)
+            if len(parts) > 1:
+                full_path = (mapped_root / parts[1]).resolve()
+            else:
+                full_path = mapped_root.resolve()
+
+            # Security: ensure path is within the mapped root
+            if not str(full_path).startswith(str(mapped_root.resolve())):
+                raise ValueError("Path traversal attempt detected")
+
+            return full_path
+
+        # Default: resolve within root
         full_path = (self.root / clean_path).resolve()
 
         # Security: ensure path is within root
@@ -45,11 +106,28 @@ class FilesystemService:
         return full_path
 
     def _to_relative(self, absolute_path: Path) -> str:
-        """Convert absolute path to relative (from root)."""
+        """Convert absolute path to relative (from root or mapped path)."""
+        # Check if this path is under a mapped fs_path
+        resolved = absolute_path.resolve()
+        for folder_name, mapped_root in self._fs_mappings.items():
+            mapped_resolved = mapped_root.resolve()
+            try:
+                rel_within_mapped = str(resolved.relative_to(mapped_resolved))
+                if rel_within_mapped == ".":
+                    retval = folder_name
+                else:
+                    retval = f"{folder_name}/{rel_within_mapped}"
+                return retval
+            except ValueError:
+                continue
+
+        # Default: relative to root
         try:
-            return str(absolute_path.relative_to(self.root))
+            retval = str(resolved.relative_to(self.root))
+            return retval
         except ValueError:
-            return str(absolute_path)
+            retval = str(absolute_path)
+            return retval
 
     def _calculate_dir_size(self, path: Path) -> int:
         """Calculate total size of a directory recursively."""
@@ -209,16 +287,16 @@ class FilesystemService:
         return breadcrumbs
 
     def is_dir_empty(self, relative_path: str) -> bool:
-        """Check if a directory has no (non-hidden) files recursively.
+        """Check if a directory has no (non-hidden) children.
 
-        Stops at the first file found, unlike count_files_recursive.
+        Returns False if the directory contains any non-hidden files or subdirectories.
         """
         dir_path = self._resolve_path(relative_path)
         if not dir_path.exists() or not dir_path.is_dir():
             return True
         try:
-            for item in dir_path.rglob("*"):
-                if item.is_file() and not item.name.startswith("."):
+            for item in dir_path.iterdir():
+                if not item.name.startswith("."):
                     return False
         except (PermissionError, OSError):
             pass
@@ -240,3 +318,14 @@ class FilesystemService:
             pass
 
         return count
+
+
+_fs_instance: FilesystemService | None = None
+
+
+def get_filesystem_service() -> FilesystemService:
+    """Get the singleton FilesystemService instance."""
+    global _fs_instance
+    if _fs_instance is None:
+        _fs_instance = FilesystemService()
+    return _fs_instance

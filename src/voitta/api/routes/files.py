@@ -29,6 +29,18 @@ async def upload_file(
     """Upload a file to the specified path."""
     if path == "Anamnesis" or path.startswith("Anamnesis/"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Anamnesis folder is read-only")
+
+    # Block upload for filesystem-backed and Docker-managed folders
+    top_folder = path.split("/")[0] if path else ""
+    if top_folder:
+        from ...services.filesystem import get_filesystem_service as _get_fs
+        fs_svc = _get_fs()
+        if top_folder in fs_svc.get_fs_mappings():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This folder is backed by an external directory; upload is not available",
+            )
+
     if not file.filename:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
