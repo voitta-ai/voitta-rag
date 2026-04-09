@@ -1,26 +1,15 @@
 #!/usr/bin/env bash
 #
-# voitta-rag session memory hook (Stop event)
+# voitta-rag SessionEnd hook
 #
-# On first invocation per Claude Code session, blocks the stop and asks
-# the assistant to save a session summary as a voitta-rag memory.
-# Subsequent invocations in the same session approve silently.
+# On Claude Code session end, reads the session transcript and creates a
+# voitta-rag memory summarising the user prompts from the session.
 #
-# Uses a marker file in /tmp keyed by parent PID (the Claude Code process).
+# Config via env vars (set by setup.sh):
+#   VOITTA_URL   voitta-rag base URL (default: http://localhost:8000)
+#   VOITTA_USER  X-User-Name header (default: $USER)
 
-MARKER="/tmp/voitta-session-memory-$$-${PPID}"
+set -euo pipefail
 
-# Clean up stale markers older than 24 hours
-find /tmp -maxdepth 1 -name "voitta-session-memory-*" -mmin +1440 -delete 2>/dev/null || true
-
-if [[ -f "$MARKER" ]]; then
-    # Already prompted this session — allow stop
-    exit 0
-fi
-
-# First stop in this session — create marker and block
-touch "$MARKER"
-
-cat <<'EOF'
-{"decision": "block", "reason": "Before ending this session, please save a brief summary of what was accomplished as a voitta-rag memory using the create_memory tool. Include: what was worked on, key decisions made, and any unfinished items. Then you may stop."}
-EOF
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+exec python3 "$SCRIPT_DIR/session-memory.py"

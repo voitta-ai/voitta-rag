@@ -146,12 +146,20 @@ def create_memory(voitta_url: str, user_name: str, content: str) -> dict:
     }
     headers = {
         "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
         "X-User-Name": user_name,
     }
     resp = requests.post(url, json=payload, headers=headers, timeout=30)
     resp.raise_for_status()
-    result = resp.json()
-    return result
+
+    # FastMCP streamable-http can return either JSON or SSE.
+    content_type = resp.headers.get("content-type", "")
+    if "text/event-stream" in content_type:
+        for line in resp.text.splitlines():
+            if line.startswith("data: "):
+                return json.loads(line[6:])
+        raise ValueError("No data frame in SSE response")
+    return resp.json()
 
 
 def main():
