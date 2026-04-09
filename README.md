@@ -22,8 +22,10 @@ Useful for teams and individuals who want to:
 - [Configuration](#configuration)
   - [Authentication](#authentication)
 - [MCP Server (for Claude Code integration)](#mcp-server-for-claude-code-integration)
-  - [Claude Code Configuration](#claude-code-configuration)
+  - [Claude Code Plugin (automated setup)](#claude-code-plugin-automated-setup)
+  - [Manual Claude Code Configuration](#manual-claude-code-configuration)
   - [Available MCP Tools](#available-mcp-tools)
+  - [Importing Claude Code Session History](#importing-claude-code-session-history)
 - [Concepts](#concepts)
   - [Projects](#projects)
   - [Toggle Switches](#toggle-switches)
@@ -96,7 +98,7 @@ pip install "transformers>=4.36.0,<5.0.0"
 
 ### Option A: Docker (recommended)
 
-Starts both voitta-rag and Qdrant with persistent storage via Docker Compose:
+Runs both voitta-rag and Qdrant in containers. No Python installation needed on the host. The web UI is at port **58000**, the MCP endpoint at `/mcp/mcp` on the same port.
 
 ```bash
 cp .env.example .env
@@ -140,21 +142,25 @@ Note: symlinks inside mounted volumes won't work -- Docker doesn't resolve symli
 
 ### Option B: Local development
 
+Runs voitta-rag directly with Python on your machine. Requires Python 3.11+ (see [Prerequisites](#prerequisites)). Qdrant still runs in Docker. The web UI is at port **8000**, the MCP endpoint at `/mcp/mcp` on the same port.
+
 ```bash
-# Start Qdrant
+# Start Qdrant (vector database)
 mkdir -p qdrant_storage
 docker run -d --name qdrant \
   -p 6333:6333 -p 6334:6334 \
   -v $(pwd)/qdrant_storage:/qdrant/storage \
   qdrant/qdrant
 
-# Install and run
+# Install Python dependencies and run
 make install
 cp .env.example .env
 make run
 ```
 
 Open http://localhost:8000 in your browser.
+
+**Key difference from Docker mode:** In local mode, voitta-rag has direct filesystem access — no volume mounts needed. Set `VOITTA_ROOT_PATH` in `.env` to the directory where indexed data should be stored.
 
 ## Configuration
 
@@ -206,7 +212,24 @@ The MCP server validates tokens independently via `X-Auth-Token-Microsoft` and `
 
 The MCP server runs embedded in the main app (no separate process needed) and exposes RAG capabilities via the [MCP protocol](https://modelcontextprotocol.io/).
 
-### Claude Code Configuration
+### Claude Code Plugin (automated setup)
+
+The fastest way to connect Claude Code to voitta-rag:
+
+```bash
+# Docker mode (port 58000)
+bash claude-plugin/setup.sh --docker
+
+# Local mode (port 8000)
+bash claude-plugin/setup.sh
+
+# With session memory hook (saves a session summary on exit)
+bash claude-plugin/setup.sh --docker --with-hook
+```
+
+The plugin configures the MCP server in `~/.claude.json` and optionally installs a `Stop` hook that prompts Claude to save a session summary as a memory. See [claude-plugin/README.md](claude-plugin/README.md) for details.
+
+### Manual Claude Code Configuration
 
 Add to `~/.claude.json` under `mcpServers` (global) or in your project settings:
 
@@ -242,6 +265,32 @@ Add to `~/.claude.json` under `mcpServers` (global) or in your project settings:
 | **`like_memory`** | Upvote a memory (increases relevance) |
 | **`dislike_memory`** | Downvote a memory (decreases relevance) |
 | **`list_memories`** | List all stored memories |
+
+### Importing Claude Code Session History
+
+Import your past Claude Code sessions as searchable memories:
+
+```bash
+python3 scripts/import_claude_history.py
+```
+
+This parses `~/.claude/history.jsonl`, groups prompts by session, and creates one memory per session. Filter what gets imported:
+
+```bash
+# Only sessions in a specific project
+python3 scripts/import_claude_history.py --project /path/to/project
+
+# Only sessions after a date
+python3 scripts/import_claude_history.py --after 2025-06-01
+
+# Only sessions mentioning a keyword
+python3 scripts/import_claude_history.py --keyword "DynamoDB"
+
+# Preview without importing
+python3 scripts/import_claude_history.py --dry-run
+```
+
+Note: Only user prompts are stored locally by Claude Code; assistant responses are not available. Despite this, user prompts provide good semantic search targets for recalling past work.
 
 ## Concepts
 
