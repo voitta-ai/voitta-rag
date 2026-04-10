@@ -106,10 +106,11 @@ Runs both voitta-rag and Qdrant in containers. No Python installation needed on 
 
 ```bash
 cp .env.example .env
+make docker-build
 make docker-up
 ```
 
-Open http://localhost:58000 in your browser. Stop with `make docker-down`.
+Open http://localhost:58000 in your browser. Stop with `make docker-down`. Rebuild the image after code changes with `make docker-build`.
 
 By default, `~/.ssh` is mounted read-only into the container for SSH-based git access. Override with:
 
