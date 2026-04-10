@@ -35,6 +35,8 @@ Useful for teams and individuals who want to:
   - [Config format](#config-format)
   - [Running against Docker](#running-against-docker)
   - [Customizing](#customizing)
+  - [Exporting from a running instance](#exporting-from-a-running-instance)
+  - [Round-trip between machines](#round-trip-between-machines)
 
 ## Features
 
@@ -395,4 +397,33 @@ To add or remove repos, edit the `folders` entries. Each repo entry needs at min
 To use a specific branch instead of auto-detection, add `"branch": "branch-name"`.
 
 Both `import_repos.json` and `import_repos_personal.json` are gitignored since they may contain credentials. Only `scripts/import_repos.example.json` is committed.
+
+### Exporting from a running instance
+
+The inverse of import. Walks the current voitta-rag folders, finds subfolders with a GitHub sync source, and writes a JSON file in the same format `import_repos.py` consumes:
+
+```bash
+python3 scripts/export_repos.py [output_path]
+```
+
+Defaults to `scripts/import_repos_personal.json` (gitignored). Only `github` sync sources are exported -- non-github connectors (Google Drive, SharePoint, Jira, etc.) are skipped with a count in the summary.
+
+**Secrets are never written.** The output records only `auth_method` per host. If you use `token` auth, you must re-add `username` and `token` to each `hosts` entry on the target machine before running `import_repos.py`.
+
+### Round-trip between machines
+
+Use the export/import pair to move your repo set from one voitta-rag instance to another:
+
+```bash
+# Machine A (source): export current state
+python3 scripts/export_repos.py /tmp/repos.json
+scp /tmp/repos.json user@machine-b:/tmp/
+
+# Machine B (target): import
+cd /path/to/voitta-rag
+make docker-build && make docker-up
+python3 scripts/import_repos.py /tmp/repos.json
+```
+
+If the target uses token auth, edit `/tmp/repos.json` on machine B to fill in `username` and `token` under each `hosts` entry before running the import. For SSH auth, make sure the target machine's SSH key is present on `~/.ssh` (mounted into the container) and authorized on GitHub.
 
