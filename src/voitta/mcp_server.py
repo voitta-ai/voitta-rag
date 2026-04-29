@@ -1,5 +1,6 @@
 """MCP server for voitta-rag RAG capabilities."""
 
+import base64
 import logging
 import mimetypes
 import uuid
@@ -848,6 +849,346 @@ def get_file_uri(file_path: str) -> FileUriResult:
         file_name=full_path.name,
         size=size,
         mime_type=mime_type,
+    )
+
+
+class FileTreeEntry(BaseModel):
+    """A node in the file tree (a file or folder)."""
+
+    name: str = Field(description="Name of the file or folder")
+    path: str = Field(description="Path relative to root ('' for root itself)")
+    type: str = Field(description="'file' or 'folder'")
+    size: int | None = Field(default=None, description="File size in bytes; None for folders")
+    modified_at: str | None = Field(default=None, description="ISO 8601 last-modified time (UTC)")
+    is_indexed: bool | None = Field(default=None, description="Whether the file is in the RAG index; None for folders")
+    chunk_count: int | None = Field(default=None, description="Indexed chunk count for files; None otherwise")
+    children: list["FileTreeEntry"] | None = Field(
+        default=None,
+        description="Child entries; populated for folders. None on leaves and on unexplored folders when recursive=False",
+    )
+
+
+FileTreeEntry.model_rebuild()
+
+
+class ListFilesResult(BaseModel):
+    """Result of list_files: a folder tree, or raw contents when path resolves to a file."""
+
+    is_file: bool = Field(description="True if the requested path resolved to a file (raw contents returned)")
+    tree: FileTreeEntry | None = Field(default=None, description="Folder tree (when is_file=False)")
+    file_path: str | None = Field(default=None, description="Path of the file (when is_file=True)")
+    file_name: str | None = Field(default=None, description="Name of the file (when is_file=True)")
+    file_size: int | None = Field(default=None, description="File size in bytes (when is_file=True)")
+    file_mime_type: str | None = Field(default=None, description="Guessed MIME type (when is_file=True)")
+    file_content: str | None = Field(
+        default=None,
+        description="UTF-8 decoded contents (when is_file=True and the file decodes as text)",
+    )
+    file_content_base64: str | None = Field(
+        default=None,
+        description="Base64-encoded contents (when is_file=True and the file is binary)",
+    )
+    truncated: bool = Field(
+        default=False,
+        description="True if the tree hit the entry cap or the file exceeded the size cap",
+    )
+    error: str | None = Field(default=None, description="Error message if the operation failed")
+
+
+def _path_within_active(rel_path: str, active_folders: list[str]) -> bool:
+    """True if rel_path is at or below any of the active folders."""
+    p = rel_path.rstrip("/")
+    for active in active_folders:
+        a = active.rstrip("/")
+        if a == "":
+            return True
+        if p == a or p.startswith(a + "/"):
+            return True
+    return False
+
+
+def _path_ancestor_of_active(rel_path: str, active_folders: list[str]) -> bool:
+    """True if rel_path is an ancestor of any active folder (so user can navigate down)."""
+    p = rel_path.rstrip("/")
+    for active in active_folders:
+        a = active.rstrip("/")
+        if p == "":
+            return True
+        if a.startswith(p + "/"):
+            return True
+    return False
+
+
+def _make_file_node(
+    abs_path: Path,
+    rel_path: str,
+    indexed_map: dict[str, int],
+) -> FileTreeEntry | None:
+    try:
+        stat = abs_path.stat()
+    except OSError:
+        return None
+    chunk_count = indexed_map.get(rel_path)
+    return FileTreeEntry(
+        name=abs_path.name,
+        path=rel_path,
+        type="file",
+        size=stat.st_size,
+        modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat(),
+        is_indexed=chunk_count is not None,
+        chunk_count=chunk_count,
+    )
+
+
+def _make_folder_node(
+    abs_path: Path,
+    rel_path: str,
+    children: list[FileTreeEntry] | None,
+) -> FileTreeEntry:
+    try:
+        stat = abs_path.stat()
+        modified_at = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc).isoformat()
+    except OSError:
+        modified_at = None
+    return FileTreeEntry(
+        name=abs_path.name or rel_path or "/",
+        path=rel_path,
+        type="folder",
+        modified_at=modified_at,
+        children=children,
+    )
+
+
+def _walk_tree(
+    abs_path: Path,
+    rel_path: str,
+    root_path: Path,
+    recursive: bool,
+    active_folders: list[str] | None,
+    indexed_map: dict[str, int],
+    max_entries: int,
+    counter: list[int],
+) -> FileTreeEntry | None:
+    """Build a tree node for abs_path. Returns None if the entry should be hidden."""
+    if counter[0] >= max_entries:
+        return None
+
+    if abs_path.is_file():
+        if active_folders is not None and not _path_within_active(rel_path, active_folders):
+            return None
+        node = _make_file_node(abs_path, rel_path, indexed_map)
+        if node is not None:
+            counter[0] += 1
+        return node
+
+    if not abs_path.is_dir():
+        return None
+
+    # Folder visibility: keep if at-or-below any active folder, or an ancestor of one
+    if active_folders is not None:
+        within = _path_within_active(rel_path, active_folders)
+        if not within and not _path_ancestor_of_active(rel_path, active_folders):
+            return None
+
+    counter[0] += 1
+
+    try:
+        entries = sorted(
+            abs_path.iterdir(),
+            key=lambda p: (not p.is_dir(), p.name.lower()),
+        )
+    except (PermissionError, OSError):
+        entries = []
+
+    children: list[FileTreeEntry] = []
+    for child in entries:
+        if counter[0] >= max_entries:
+            break
+        try:
+            child_rel = str(child.relative_to(root_path))
+        except ValueError:
+            continue
+
+        if child.is_file():
+            if active_folders is not None and not _path_within_active(child_rel, active_folders):
+                continue
+            child_node = _make_file_node(child, child_rel, indexed_map)
+            if child_node is not None:
+                counter[0] += 1
+                children.append(child_node)
+        elif child.is_dir():
+            if recursive:
+                child_node = _walk_tree(
+                    child, child_rel, root_path, True,
+                    active_folders, indexed_map, max_entries, counter,
+                )
+                if child_node is not None:
+                    children.append(child_node)
+            else:
+                # Non-recursive: include immediate folder as a leaf, no further descent
+                if active_folders is not None:
+                    within = _path_within_active(child_rel, active_folders)
+                    if not within and not _path_ancestor_of_active(child_rel, active_folders):
+                        continue
+                counter[0] += 1
+                children.append(_make_folder_node(child, child_rel, None))
+
+    return _make_folder_node(abs_path, rel_path, children)
+
+
+@mcp.tool()
+def list_files(
+    folder: str = "",
+    recursive: bool = True,
+) -> ListFilesResult:
+    """List files and folders under `folder` as a JSON tree, or return raw file contents if `folder` points to a file.
+
+    AVOID THIS TOOL FOR CONTENT RETRIEVAL. For finding or reading indexed content, use
+    `search` followed by `get_chunk_range` (or `get_file` for a whole document) — those go
+    through the index and are dramatically cheaper. `list_files` walks the filesystem on
+    every call and is intended only for filesystem inspection: rendering a file-manager
+    view, auditing what's on disk, or debugging indexing gaps. It is not the right tool
+    for answering questions about document contents.
+
+    If `folder` resolves to a file (not a directory), this tool returns the file's raw
+    contents instead of a tree, regardless of the `recursive` flag. Text files are
+    returned in `file_content`; binary files are returned base64-encoded in
+    `file_content_base64`.
+
+    User folder-activation rules are honored: only entries inside an active folder (or
+    folders that are ancestors leading to one, so navigation is possible) are returned.
+    Hidden files (dotfiles) are included.
+
+    Args:
+        folder: Path relative to root. "" or "/" means the root. May also be a file path.
+        recursive: Walk subdirectories fully. When False, only immediate children are
+            listed (subfolders appear as leaves with `children=None`). Ignored when
+            `folder` resolves to a file.
+
+    Returns:
+        ListFilesResult — either `tree` is populated (folder mode) or `file_content` /
+        `file_content_base64` is populated (file mode). Trees are capped at 5000 entries;
+        files larger than 10MB are not inlined (use `get_file_uri` to download).
+    """
+    settings = get_settings()
+    root_path = settings.root_path
+
+    # Resolve target
+    if not folder or folder in ("/", "."):
+        target_path = root_path
+        rel_path = ""
+    else:
+        clean = folder.lstrip("/")
+        target_path = (root_path / clean).resolve()
+        rel_path = clean.rstrip("/")
+
+    # Security: must be inside root
+    try:
+        target_path.relative_to(root_path)
+    except ValueError:
+        return ListFilesResult(is_file=False, error="Invalid path: outside root")
+
+    if not target_path.exists():
+        return ListFilesResult(is_file=False, error=f"Path not found: {folder}")
+
+    user_name = _get_current_user_name()
+    user_active_folders: list[str] | None = None
+    engine = get_sync_engine()
+
+    with Session(engine) as db:
+        if user_name:
+            user = _get_or_create_user(db, user_name)
+            user_active_folders = _get_user_active_folders(db, user)
+            if not user_active_folders:
+                return ListFilesResult(
+                    is_file=False,
+                    error="No folders are active for this user",
+                )
+
+    # File mode: return raw contents
+    if target_path.is_file():
+        if user_active_folders is not None and not _path_within_active(rel_path, user_active_folders):
+            return ListFilesResult(
+                is_file=True,
+                file_path=rel_path,
+                file_name=target_path.name,
+                error="File is not within an active folder",
+            )
+
+        try:
+            stat = target_path.stat()
+        except OSError as exc:
+            return ListFilesResult(is_file=True, error=f"Cannot stat file: {exc}")
+
+        mime_type = mimetypes.guess_type(str(target_path))[0] or "application/octet-stream"
+
+        FILE_MAX_BYTES = 10 * 1024 * 1024
+        if stat.st_size > FILE_MAX_BYTES:
+            return ListFilesResult(
+                is_file=True,
+                file_path=rel_path,
+                file_name=target_path.name,
+                file_size=stat.st_size,
+                file_mime_type=mime_type,
+                truncated=True,
+                error=f"File exceeds {FILE_MAX_BYTES} bytes; use get_file_uri to download",
+            )
+
+        try:
+            data = target_path.read_bytes()
+        except OSError as exc:
+            return ListFilesResult(is_file=True, error=f"Cannot read file: {exc}")
+
+        try:
+            content_text = data.decode("utf-8")
+            content_b64 = None
+        except UnicodeDecodeError:
+            content_text = None
+            content_b64 = base64.b64encode(data).decode("ascii")
+
+        return ListFilesResult(
+            is_file=True,
+            file_path=rel_path,
+            file_name=target_path.name,
+            file_size=stat.st_size,
+            file_mime_type=mime_type,
+            file_content=content_text,
+            file_content_base64=content_b64,
+        )
+
+    if not target_path.is_dir():
+        return ListFilesResult(is_file=False, error=f"Not a file or directory: {folder}")
+
+    # Folder mode: walk and build tree
+    indexed_map: dict[str, int] = {}
+    with Session(engine) as db:
+        result = db.execute(select(IndexedFile.file_path, IndexedFile.chunk_count))
+        for fpath, ccount in result.fetchall():
+            indexed_map[fpath] = ccount
+
+    MAX_ENTRIES = 5000
+    counter = [0]
+    tree = _walk_tree(
+        target_path,
+        rel_path,
+        root_path,
+        recursive,
+        user_active_folders,
+        indexed_map,
+        MAX_ENTRIES,
+        counter,
+    )
+
+    if tree is None:
+        return ListFilesResult(
+            is_file=False,
+            error="Folder is not visible to the current user",
+        )
+
+    return ListFilesResult(
+        is_file=False,
+        tree=tree,
+        truncated=counter[0] >= MAX_ENTRIES,
     )
 
 
