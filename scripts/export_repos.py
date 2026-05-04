@@ -15,10 +15,13 @@ Usage:
 
 Defaults to scripts/import_repos_personal.json (which is gitignored).
 Reads VOITTA_HOST and DOCKER_PORT from .env (or env) to build the base URL.
+If multiple users exist on the instance, set VOITTA_USER=<id-or-name>
+to disambiguate; otherwise the first user is selected.
 """
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from urllib.parse import urlparse
@@ -70,14 +73,64 @@ def get_host_from_repo(repo_url):
     return retval
 
 
+USER_FORM_RE = re.compile(
+    r'action="/select-user/(?P<id>\d+)".*?<span class="user-name">(?P<name>[^<]+)</span>',
+    re.DOTALL,
+)
+
+
+def parse_users(html):
+    """Extract (id, name) tuples from the landing page user picker."""
+    retval = [(int(m["id"]), m["name"].strip()) for m in USER_FORM_RE.finditer(html)]
+    return retval
+
+
+def pick_user(users):
+    """Choose a user given the picker list, honoring VOITTA_USER (id or name)."""
+    if not users:
+        return None
+    selector = (os.environ.get("VOITTA_USER") or "").strip()
+    if selector:
+        if selector.isdigit():
+            sel_id = int(selector)
+            for uid, name in users:
+                if uid == sel_id:
+                    return uid, name
+        for uid, name in users:
+            if name == selector:
+                return uid, name
+        print(f"  ERROR: VOITTA_USER='{selector}' not found in {users}")
+        return None
+    if len(users) == 1:
+        return users[0]
+    print(
+        f"  ERROR: multiple users found {users}; "
+        f"set VOITTA_USER=<id-or-name> to choose one"
+    )
+    return None
+
+
 def ensure_user(session, base_url):
-    """Establish a user session cookie via landing page redirect."""
+    """Establish a user session cookie via landing page redirect or POST select."""
     resp = session.get(f"{base_url}/", allow_redirects=False)
     if resp.status_code == 302:
         session.get(f"{base_url}{resp.headers['Location']}")
         return True
-    print("  Warning: could not auto-login. Visit the UI first.")
-    return False
+    if resp.status_code != 200:
+        print(f"  ERROR: landing page returned {resp.status_code}")
+        return False
+    users = parse_users(resp.text)
+    pick = pick_user(users)
+    if pick is None:
+        return False
+    uid, name = pick
+    print(f"  Selecting user {uid} ({name})")
+    sel = session.post(f"{base_url}/select-user/{uid}", allow_redirects=False)
+    if sel.status_code != 302:
+        print(f"  ERROR: /select-user/{uid} returned {sel.status_code}")
+        return False
+    session.get(f"{base_url}{sel.headers['Location']}")
+    return True
 
 
 def list_folder(session, base_url, path):
@@ -96,15 +149,27 @@ def list_folder(session, base_url, path):
 
 
 def get_sync_source(session, base_url, path):
-    """Fetch sync source config for a folder. Returns dict or None if unset."""
+    """Fetch sync source config for a folder.
+
+    Returns:
+        ("ok", dict) when a sync source is configured,
+        ("none", None) when the folder exists but has no sync source (API returns null),
+        ("error", str)  on HTTP or decode failure.
+    """
     resp = session.get(f"{base_url}/api/sync/{path}")
     if not resp.ok:
-        return None
+        retval = ("error", f"HTTP {resp.status_code}")
+        return retval
     try:
         data = resp.json()
     except ValueError:
-        return None
-    return data
+        retval = ("error", "non-json response")
+        return retval
+    if data is None:
+        retval = ("none", None)
+        return retval
+    retval = ("ok", data)
+    return retval
 
 
 def main():
@@ -137,6 +202,8 @@ def main():
     folders = {}
     github_count = 0
     non_github_count = 0
+    no_source_count = 0
+    error_count = 0
 
     for top in top_items:
         if not top.get("is_dir"):
@@ -153,8 +220,13 @@ def main():
             if not child.get("is_dir"):
                 continue
             child_path = f"{top_name}/{child['name']}"
-            source = get_sync_source(session, base_url, child_path)
-            if source is None:
+            status, source = get_sync_source(session, base_url, child_path)
+            if status == "error":
+                print(f"  ERROR fetching {child_path}: {source}")
+                error_count += 1
+                continue
+            if status == "none":
+                no_source_count += 1
                 continue
             source_type = source.get("source_type", "")
             if source_type != "github":
@@ -174,8 +246,11 @@ def main():
 
             folders.setdefault(top_name, [])
             entry = {"repo": repo_url}
-            # Only record branch if it's not one the import script would auto-detect
-            if branch and branch not in ("main", "master", "develop"):
+            # Always preserve the source branch so the target reproduces it
+            # exactly. Earlier versions dropped main/master/develop expecting
+            # the importer to auto-detect, but a folder explicitly tracking
+            # 'develop' could end up on 'main' when the remote has both.
+            if branch:
                 entry["branch"] = branch
             folders[top_name].append(entry)
             github_count += 1
@@ -190,8 +265,15 @@ def main():
           f"folder(s) to {output_path}")
     if non_github_count:
         print(f"Skipped {non_github_count} non-github sync sources")
+    if no_source_count:
+        print(f"Skipped {no_source_count} folders with no sync source")
+    if error_count:
+        print(f"Encountered {error_count} errors fetching sync sources -- "
+              f"export may be incomplete")
     print("Note: auth tokens/usernames are NOT exported. Re-enter them on "
           "the target machine before running import_repos.py.")
+    if error_count:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
