@@ -69,4 +69,3 @@ scripts/import_repos_personal.json
 CLAUDE.md
 docker-compose.override.yml
 .gitnexus
-.handoffs/
