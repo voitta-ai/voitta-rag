@@ -21,6 +21,7 @@ services:
       - VOITTA_DB_PATH=/data/voitta.db
       - VOITTA_USERS_FILE=/data/users.txt
       - HF_HOME=/root/.cache/huggingface
+      - GIT_SSH_COMMAND=ssh -o IgnoreUnknown=UseKeychain -o StrictHostKeyChecking=no
     volumes:
       - ${VOITTA_ROOT_PATH}:/data
       - ${SSH_KEY_DIR:-~/.ssh}:/root/.ssh:ro

@@ -41,6 +41,9 @@ def load_dotenv():
         key, _, value = line.partition("=")
         key = key.strip()
         value = value.strip()
+        # Strip inline comments (but not inside quoted values)
+        if value and value[0] not in ('"', "'"):
+            value = value.split("#")[0].strip()
         if not os.environ.get(key):
             os.environ[key] = value
 
@@ -147,7 +150,12 @@ def configure_sync(session, base_url, folder_path, repo_url, branch, host_config
     }
     if auth_method == "token":
         github_config["username"] = host_config.get("username", "")
-        github_config["token"] = host_config.get("token", "")
+        token = host_config.get("token", "")
+        if not token:
+            host = get_host(repo_url)
+            env_key = host.replace(".", "_").upper() + "_TOKEN"
+            token = os.environ.get(env_key, os.environ.get("GITHUB_TOKEN", ""))
+        github_config["token"] = token
 
     payload = {
         "source_type": "github",

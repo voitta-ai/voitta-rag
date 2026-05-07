@@ -19,6 +19,27 @@ from .base import BaseSyncConnector, RemoteFile
 logger = logging.getLogger(__name__)
 
 
+def _ssh_url_to_https(url: str) -> str:
+    """Convert git SSH URL to HTTPS.
+
+    git@github.com:org/repo.git -> https://github.com/org/repo.git
+    ssh://git@host/org/repo     -> https://host/org/repo
+    """
+    if url.startswith("git@"):
+        host, _, path = url[len("git@"):].partition(":")
+        retval = f"https://{host}/{path}"
+        return retval
+    if url.startswith("ssh://"):
+        parsed = urlparse(url)
+        retval = urlunparse(parsed._replace(
+            scheme="https",
+            netloc=parsed.hostname + (f":{parsed.port}" if parsed.port else ""),
+        ))
+        return retval
+    retval = url
+    return retval
+
+
 def _inject_token_into_url(repo_url: str, username: str, token: str) -> str:
     """Rewrite an HTTPS repo URL to embed credentials.
 
@@ -56,8 +77,12 @@ async def _run_git_cmd(
             askpass_file.close()
             os.chmod(askpass_file.name, stat.S_IRWXU)
             env["GIT_ASKPASS"] = askpass_file.name
-            # Also inject credentials into the URL for commands that take a URL arg
+            # Convert SSH URLs to HTTPS so token auth works
             args = list(args)
+            for i, arg in enumerate(args):
+                if arg.startswith("git@") or arg.startswith("ssh://"):
+                    args[i] = _ssh_url_to_https(arg)
+            # Inject credentials into HTTPS URLs
             for i, arg in enumerate(args):
                 if arg.startswith("https://"):
                     args[i] = _inject_token_into_url(arg, user, token.strip())

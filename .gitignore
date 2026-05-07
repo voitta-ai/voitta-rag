@@ -61,6 +61,7 @@ qdrant_storage/
 logs/
 users.txt
 scripts/import_repos.json
+scripts/import_repos_personal.json
 
 *~
 \#*
@@ -68,4 +69,3 @@ scripts/import_repos.json
 CLAUDE.md
 docker-compose.override.yml
 .gitnexus
-.handoffs/
