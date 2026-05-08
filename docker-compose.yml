@@ -13,6 +13,7 @@ services:
     restart: unless-stopped
     ports:
       - "${DOCKER_PORT:-58000}:8000"
+      - "${MCP_DOCKER_PORT:-8001}:8001"
     env_file: .env
     environment:
       - QDRANT_HOST=qdrant
