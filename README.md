@@ -225,7 +225,16 @@ The MCP server runs embedded in the main app (no separate process needed) and ex
 
 ### Claude Code Plugin (automated setup)
 
-The fastest way to connect Claude Code to voitta-rag:
+voitta-rag ships as a [Claude Code plugin](https://code.claude.com/docs/en/plugins).
+This repo is its own marketplace, so install with:
+
+```
+/plugin marketplace add voitta-ai/voitta-rag
+/plugin install voitta-rag@voitta-rag
+```
+
+The MCP server URL depends on your deployment (Docker vs local), so after
+installing the plugin run the setup script to configure it:
 
 ```bash
 # Docker mode (port 58000)
@@ -238,7 +247,7 @@ bash claude-plugin/setup.sh
 bash claude-plugin/setup.sh --docker --with-hook
 ```
 
-The plugin configures the MCP server in `~/.claude.json` and optionally installs a `Stop` hook that prompts Claude to save a session summary as a memory. See [claude-plugin/README.md](claude-plugin/README.md) for details.
+See [claude-plugin/README.md](claude-plugin/README.md) for details.
 
 ### Manual Claude Code Configuration
 

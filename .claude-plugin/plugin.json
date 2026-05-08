@@ -1,0 +1,11 @@
+{
+  "name": "voitta-rag",
+  "description": "RAG knowledge base with MCP integration for Claude Code - indexes documents, code repos, and provides semantic search.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Voitta"
+  },
+  "homepage": "https://github.com/voitta-ai/voitta-rag",
+  "repository": "https://github.com/voitta-ai/voitta-rag",
+  "license": "AGPL-3.0"
+}
