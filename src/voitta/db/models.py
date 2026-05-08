@@ -168,6 +168,7 @@ class FolderSyncSource(Base):
     gh_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     gh_pat: Mapped[str | None] = mapped_column(String(500), nullable=True)
     gh_all_branches: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
+    gh_llm_tldr: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=False)
 
     # Azure DevOps credentials
     ado_tenant_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -238,6 +239,22 @@ class IndexedFile(Base):
     chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     source_created_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source_modified_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class LlmTldrIndexedFile(Base):
+    """Track llm-tldr companion analysis chunks per source file."""
+
+    __tablename__ = "llm_tldr_indexed_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    folder_path: Mapped[str] = mapped_column(String(1000), nullable=False, index=True)
+    related_file: Mapped[str] = mapped_column(String(1000), nullable=False, index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    chunk_count: Mapped[int] = mapped_column(Integer, default=0)
     indexed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
