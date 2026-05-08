@@ -1,0 +1,14 @@
+{
+  "name": "voitta-rag",
+  "owner": {
+    "name": "Voitta"
+  },
+  "description": "RAG knowledge base with MCP integration for Claude Code.",
+  "plugins": [
+    {
+      "name": "voitta-rag",
+      "source": "./",
+      "description": "RAG knowledge base with MCP integration - indexes documents, code repos, and provides semantic search."
+    }
+  ]
+}
