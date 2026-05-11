@@ -45,6 +45,17 @@ class ChunkMetadata:
     # analysis was derived from.
     source_type: str | None = None
     related_file: str | None = None
+    # llm-tldr Phase 3 — structured call-graph payload (only set on
+    # source_type == "llm-tldr-analysis" chunks). Lets Qdrant filters
+    # answer "functions with >5 callers" / "functions importing X".
+    tldr_chunk_kind: str | None = None  # "function" | "file_overview"
+    tldr_function_name: str | None = None
+    tldr_class_name: str | None = None  # for methods; None for free functions
+    tldr_callees: list[str] | None = None
+    tldr_callers: list[str] | None = None
+    tldr_caller_count: int | None = None
+    tldr_callee_count: int | None = None
+    tldr_imports: list[str] | None = None  # file-level imports, attached to each function chunk
 
 
 @dataclass
@@ -91,6 +102,7 @@ class VectorStoreService:
             self._ensure_acl_index()
             self._ensure_source_url_index()
             self._ensure_companion_chunk_indexes()
+            self._ensure_tldr_callgraph_indexes()
         except (UnexpectedResponse, Exception):
             logger.info(f"Creating collection '{self.collection_name}'")
             self._client.create_collection(
@@ -106,13 +118,13 @@ class VectorStoreService:
                 },
             )
             # Create payload indexes for efficient filtering
-            for field in ("file_path", "folder_path", "index_folder", "allowed_users", "source_url", "source_type", "related_file"):
+            for field in ("file_path", "folder_path", "index_folder", "allowed_users", "source_url", "source_type", "related_file", "tldr_chunk_kind", "tldr_function_name", "tldr_class_name", "tldr_callees", "tldr_callers", "tldr_imports"):
                 self._client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name=field,
                     field_schema=qmodels.PayloadSchemaType.KEYWORD,
                 )
-            for field in ("source_created_at", "source_modified_at"):
+            for field in ("source_created_at", "source_modified_at", "tldr_caller_count", "tldr_callee_count"):
                 self._client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name=field,
@@ -182,6 +194,45 @@ class VectorStoreService:
                     logger.info(f"Created index for '{field}' on '{self.collection_name}'")
         except Exception as e:
             logger.warning(f"Failed to ensure companion-chunk indexes: {e}")
+
+    def _ensure_tldr_callgraph_indexes(self) -> None:
+        """Create payload indexes for llm-tldr Phase 3 call-graph fields.
+
+        KEYWORD indexes for kind / function / class / callees / callers /
+        imports (so filters can do MatchAny). INTEGER indexes for caller
+        and callee counts (so filters can do Range, e.g. "functions with
+        >5 callers").
+        """
+        try:
+            info = self._client.get_collection(self.collection_name)
+            existing = set(info.payload_schema.keys()) if info.payload_schema else set()
+            keyword_fields = (
+                "tldr_chunk_kind",
+                "tldr_function_name",
+                "tldr_class_name",
+                "tldr_callees",
+                "tldr_callers",
+                "tldr_imports",
+            )
+            integer_fields = ("tldr_caller_count", "tldr_callee_count")
+            for field in keyword_fields:
+                if field not in existing:
+                    self._client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name=field,
+                        field_schema=qmodels.PayloadSchemaType.KEYWORD,
+                    )
+                    logger.info(f"Created index for '{field}' on '{self.collection_name}'")
+            for field in integer_fields:
+                if field not in existing:
+                    self._client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name=field,
+                        field_schema=qmodels.PayloadSchemaType.INTEGER,
+                    )
+                    logger.info(f"Created index for '{field}' on '{self.collection_name}'")
+        except Exception as e:
+            logger.warning(f"Failed to ensure tldr call-graph indexes: {e}")
 
     def delete_by_folder_and_related_file(
         self, folder_path: str, related_file: str,
@@ -380,6 +431,23 @@ class VectorStoreService:
                 payload["source_type"] = metadata.source_type
             if metadata.related_file is not None:
                 payload["related_file"] = metadata.related_file
+            # llm-tldr Phase 3 — call-graph payload
+            if metadata.tldr_chunk_kind is not None:
+                payload["tldr_chunk_kind"] = metadata.tldr_chunk_kind
+            if metadata.tldr_function_name is not None:
+                payload["tldr_function_name"] = metadata.tldr_function_name
+            if metadata.tldr_class_name is not None:
+                payload["tldr_class_name"] = metadata.tldr_class_name
+            if metadata.tldr_callees is not None:
+                payload["tldr_callees"] = metadata.tldr_callees
+            if metadata.tldr_callers is not None:
+                payload["tldr_callers"] = metadata.tldr_callers
+            if metadata.tldr_caller_count is not None:
+                payload["tldr_caller_count"] = metadata.tldr_caller_count
+            if metadata.tldr_callee_count is not None:
+                payload["tldr_callee_count"] = metadata.tldr_callee_count
+            if metadata.tldr_imports is not None:
+                payload["tldr_imports"] = metadata.tldr_imports
 
             # Build vector: unnamed dense + optional sparse
             if sparse_vectors and idx < len(sparse_vectors):
@@ -660,6 +728,14 @@ class VectorStoreService:
                 source_url=payload.get("source_url"),
                 source_type=payload.get("source_type"),
                 related_file=payload.get("related_file"),
+                tldr_chunk_kind=payload.get("tldr_chunk_kind"),
+                tldr_function_name=payload.get("tldr_function_name"),
+                tldr_class_name=payload.get("tldr_class_name"),
+                tldr_callees=payload.get("tldr_callees"),
+                tldr_callers=payload.get("tldr_callers"),
+                tldr_caller_count=payload.get("tldr_caller_count"),
+                tldr_callee_count=payload.get("tldr_callee_count"),
+                tldr_imports=payload.get("tldr_imports"),
             ),
             score=result.score,
         )
