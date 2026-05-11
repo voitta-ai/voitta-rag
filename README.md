@@ -37,6 +37,8 @@ Useful for teams and individuals who want to:
   - [Customizing](#customizing)
   - [Exporting from a running instance](#exporting-from-a-running-instance)
   - [Round-trip between machines](#round-trip-between-machines)
+- [Advanced](#advanced)
+  - [SQLite journal mode on Docker bind-mounts](#sqlite-journal-mode-on-docker-bind-mounts)
 
 ## Features
 
@@ -435,4 +437,68 @@ python3 scripts/import_repos.py /tmp/repos.json
 ```
 
 If the target uses token auth, edit `/tmp/repos.json` on machine B to fill in `username` and `token` under each `hosts` entry before running the import. For SSH auth, make sure the target machine's SSH key is present on `~/.ssh` (mounted into the container) and authorized on GitHub.
+
+## Advanced
+
+### SQLite journal mode on Docker bind-mounts
+
+> **For operators only.** Skip this unless you hit the symptom below.
+
+voitta-rag stores its operational metadata in a SQLite database
+(`voitta.db`). By default SQLite picks rollback journaling (mode
+`delete`), which is the safe choice when the file lives on a Docker
+bind-mount from a macOS or Windows host. The application does **not**
+force a journal mode — it leaves whatever the file header specifies.
+
+**Symptom:** under sustained use on a bind-mounted setup (Docker
+Desktop, Rancher Desktop, OrbStack on macOS or Windows), some HTTP
+endpoints intermittently fail with:
+
+```
+sqlalchemy.exc.OperationalError: (sqlite3.OperationalError) disk I/O error
+```
+
+while `sqlite3 voitta.db "PRAGMA integrity_check;"` returns `ok` and
+the host can read the same query without issue. Restarting the
+container temporarily fixes it, then it comes back.
+
+**Root cause:** the database is using SQLite's WAL (write-ahead log)
+journal mode. WAL relies on a `-shm` shared-memory page that does not
+cross the host/VM file-sharing boundary cleanly. Stale `-shm`
+mappings — left over from a previous container session, laptop sleep,
+or a host-side process that touched the file — surface as EIO on the
+next query.
+
+**Fix:** force the database to use rollback journaling (mode `delete`)
+once. The setting is persisted in the SQLite file header and survives
+container restarts.
+
+```bash
+# 1. Stop the voitta-rag container so nothing has the DB open.
+docker compose stop voitta-rag
+
+# 2. Truncate any pending WAL and switch journal_mode on the file.
+sqlite3 $VOITTA_ROOT_PATH/voitta.db "PRAGMA wal_checkpoint(TRUNCATE);"
+sqlite3 $VOITTA_ROOT_PATH/voitta.db "PRAGMA journal_mode = DELETE;"
+
+# 3. Confirm the change stuck.
+sqlite3 $VOITTA_ROOT_PATH/voitta.db "PRAGMA journal_mode;"   # prints: delete
+
+# 4. Bring the container back up.
+docker compose start voitta-rag
+```
+
+**Trade-off:** rollback journaling serializes writes against reads, so
+on a single-writer / many-reader workload like voitta-rag the cost is
+modest. If your workload is write-heavy enough that you actually need
+WAL throughput and you are not on a bind-mount (e.g. you've moved the
+DB into a Docker named volume), you can force WAL the same way:
+
+```bash
+sqlite3 voitta.db "PRAGMA journal_mode = WAL;"
+```
+
+See also the [SQLite docs on journal mode](https://www.sqlite.org/pragma.html#pragma_journal_mode)
+and [WAL mode caveats on networked filesystems](https://www.sqlite.org/wal.html#sometimes_queries_return_sqlite_busy_in_wal_mode).
+
 
