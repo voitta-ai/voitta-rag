@@ -119,7 +119,7 @@ class LlmTldrIndexer:
                     LlmTldrIndexedFile.folder_path == folder_path
                 )
             )
-            db.flush()
+            db.commit()
 
         # Snapshot known state from the DB.
         existing_rows = db.execute(
@@ -148,11 +148,18 @@ class LlmTldrIndexer:
         )
 
         # Removed files: in DB, not on disk → delete their chunks + rows.
+        # Commit per file to keep each SQLite write transaction tiny. With
+        # journal_mode=DELETE the SQLite file lock is held for the whole
+        # transaction, blocking any concurrent writer (e.g. the FastAPI
+        # request handler that triggered the sync). A single transaction
+        # spanning the entire indexer pass routinely exceeds busy_timeout
+        # and surfaces as "database is locked" after partial progress.
         removed = set(existing_by_rel) - set(current_hashes)
         for rel in removed:
             self.vector_store.delete_by_folder_and_related_file(folder_path, rel)
             db.delete(existing_by_rel[rel])
             stats["files_removed"] += 1
+            db.commit()
 
         # New / changed files: extract, store, upsert row.
         for rel, source_hash in current_hashes.items():
@@ -210,8 +217,8 @@ class LlmTldrIndexer:
                 existing_row.updated_at = datetime.now(timezone.utc)
                 stats["files_updated"] += 1
             stats["chunks_stored"] += chunks_stored
+            db.commit()
 
-        db.commit()
         logger.info("llm-tldr: indexing complete for %s: %s", folder_path, stats)
         return stats
 
