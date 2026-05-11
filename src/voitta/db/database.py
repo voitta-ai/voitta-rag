@@ -18,9 +18,18 @@ from .models import Base, FolderSyncSource, Project, User
 
 
 def _set_sqlite_pragmas(dbapi_conn, connection_record):
-    """Set SQLite pragmas on every new connection."""
+    """Set SQLite pragmas on every new connection.
+
+    journal_mode is intentionally NOT forced. It is a per-file setting
+    persisted in the SQLite header; pinning it on every connect blocks
+    operators from picking a non-WAL mode (e.g. DELETE) when the database
+    file lives on a Docker bind-mount, where WAL's shared-memory page
+    cannot cross the host/VM file-sharing boundary cleanly and produces
+    intermittent ``disk I/O error`` (SQLITE_IOERR_*) failures. Operators
+    pick a mode once with
+    ``sqlite3 voitta.db 'PRAGMA journal_mode = DELETE;'`` and it sticks.
+    """
     cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA journal_mode=WAL")
     cursor.execute("PRAGMA busy_timeout=30000")
     cursor.close()
 
@@ -206,9 +215,19 @@ def _discover_docker_folders(engine: Engine) -> None:
                     logger.info("Removing stale Docker filesystem entry (has child sources): %s", source.folder_path)
                     session.delete(source)
 
-        # Mark remaining root-level entries as Docker-managed
+        # Clear is_docker_managed on non-filesystem sources. Only filesystem
+        # sources can correspond to Docker volume mounts; remote sync sources
+        # (github, sharepoint, jira, etc.) happen to live under root_path
+        # because that's where their synced files land, but they are not
+        # Docker-managed and must remain user-deletable.
         for source in all_sources:
-            if source.folder_path in root_folder_names:
+            if source.source_type != "filesystem" and source.is_docker_managed:
+                source.is_docker_managed = False
+
+        # Mark remaining filesystem root-level entries as Docker-managed.
+        for source in all_sources:
+            if (source.source_type == "filesystem"
+                    and source.folder_path in root_folder_names):
                 source.is_docker_managed = True
 
         session.commit()
