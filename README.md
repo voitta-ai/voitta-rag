@@ -39,6 +39,7 @@ Useful for teams and individuals who want to:
   - [Round-trip between machines](#round-trip-between-machines)
 - [Advanced](#advanced)
   - [SQLite journal mode on Docker bind-mounts](#sqlite-journal-mode-on-docker-bind-mounts)
+  - [Git post-commit hook](#git-post-commit-hook)
 
 ## Features
 
@@ -500,5 +501,95 @@ sqlite3 voitta.db "PRAGMA journal_mode = WAL;"
 
 See also the [SQLite docs on journal mode](https://www.sqlite.org/pragma.html#pragma_journal_mode)
 and [WAL mode caveats on networked filesystems](https://www.sqlite.org/wal.html#sometimes_queries_return_sqlite_busy_in_wal_mode).
+
+### Git post-commit hook
+
+> **For operators only.** Skip this if your Git sources reindex on a
+> schedule and you don't need fresh data after each commit.
+
+If you have a voitta-rag Git source pointed at a repository you actively
+work on, you can wire a post-commit hook in that repository so every
+local commit immediately triggers a sync (which also re-runs the
+optional `llm-tldr` static analysis from issue [#15](https://github.com/voitta-ai/voitta-rag/issues/15)).
+This keeps the indexed snapshot — both raw code chunks and structural
+analysis chunks — in lockstep with `HEAD` on your machine without
+waiting for the next scheduled sync.
+
+**1. Enable the hook endpoint on the voitta-rag server.**
+
+The hook calls `POST /api/sync/_hook/sync/{folder_path}` which is
+authenticated by a shared secret in the `X-Voitta-Hook-Secret` header,
+not by browser cookie. The route is disabled (returns 403) when the
+secret env var is unset, so this is strictly opt-in.
+
+In your voitta-rag `.env`:
+
+```
+VOITTA_HOOK_SECRET=<choose a long random string>
+```
+
+Restart the container so the new env var is picked up:
+
+```
+docker compose restart voitta-rag
+```
+
+**2. Install the hook in your repo.**
+
+Copy `scripts/git-hooks/post-commit` from this repo into your target
+repo's `.git/hooks/` directory and make it executable:
+
+```
+cp /path/to/voitta-rag/scripts/git-hooks/post-commit \
+   /path/to/my-repo/.git/hooks/post-commit
+chmod +x /path/to/my-repo/.git/hooks/post-commit
+```
+
+If you maintain shared hooks across multiple repos via `core.hooksPath`
+or a tool like [husky](https://typicode.github.io/husky/), drop the
+script there instead.
+
+**3. Tell the hook how to reach your voitta-rag.**
+
+The hook reads three environment variables. Set them in your shell rc
+file (`~/.bashrc`, `~/.zshrc`, etc.) so they're available whenever you
+commit:
+
+```
+export VOITTA_RAG_URL=http://localhost:58000
+export VOITTA_RAG_FOLDER=my-repo              # the voitta-rag folder_path
+export VOITTA_HOOK_SECRET=<same value as on the server>
+```
+
+The hook bails out silently when any of these is unset, so the same
+script can live in repos that aren't synced to voitta-rag.
+
+**4. Verify.**
+
+Make a commit. You should see a line like:
+
+```
+[voitta-rag] {"folder_path":"my-repo","status":"syncing","message":"Sync started"}
+```
+
+Set `VOITTA_HOOK_QUIET=1` to suppress that line if your commit output
+must stay clean.
+
+**5. Watch the sync progress.**
+
+Sync runs in the background on the voitta-rag side; the hook returns
+immediately. Tail the server's app log to confirm:
+
+```
+docker exec <voitta-rag-container> tail -f logs/app.log | grep -E "sync|llm-tldr"
+```
+
+**Notes**
+
+- The hook exits 0 unconditionally on any error so a voitta-rag outage
+  never blocks a commit.
+- The hook never reads your commit content; it just pings the API.
+- The endpoint is HTTP only — terminate TLS at a reverse proxy if your
+  voitta-rag listens on the public network.
 
 

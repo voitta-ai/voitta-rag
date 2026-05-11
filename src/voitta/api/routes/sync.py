@@ -3,7 +3,10 @@
 import base64
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+import os
+import secrets as _secrets
+
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -773,6 +776,62 @@ async def trigger_sync(
 
     return SyncTriggerResponse(
         folder_path=path, status="syncing", message="Sync started"
+    )
+
+
+@router.post("/_hook/sync/{path:path}", response_model=SyncTriggerResponse)
+async def hook_trigger_sync(
+    path: str,
+    db: DB,
+    background_tasks: BackgroundTasks,
+    x_voitta_hook_secret: str = Header(default=""),
+):
+    """Trigger a sync from an out-of-process hook (e.g. git post-commit).
+
+    Authenticated by the ``X-Voitta-Hook-Secret`` request header, which
+    is compared in constant time against the ``VOITTA_HOOK_SECRET``
+    environment variable. The route is intentionally NOT cookie-gated so
+    a shell script can call it from a developer's git post-commit hook
+    without needing a logged-in browser session. When the env var is
+    unset the route is disabled (returns 403) — opt-in by design.
+
+    Body and response shape match the regular ``/{path}/trigger``
+    endpoint.
+    """
+    expected = os.getenv("VOITTA_HOOK_SECRET", "")
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="VOITTA_HOOK_SECRET is not set; hook endpoint disabled",
+        )
+    if not _secrets.compare_digest(expected, x_voitta_hook_secret):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="invalid hook secret",
+        )
+
+    result = await db.execute(
+        select(FolderSyncSource).where(FolderSyncSource.folder_path == path)
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No sync source configured for this folder",
+        )
+
+    if source.sync_status == "syncing":
+        return SyncTriggerResponse(
+            folder_path=path, status="syncing", message="Sync already in progress"
+        )
+
+    source.sync_status = "syncing"
+    source.sync_error = None
+    await db.flush()
+    background_tasks.add_task(_run_sync, path)
+
+    return SyncTriggerResponse(
+        folder_path=path, status="syncing", message="Sync started",
     )
 
 

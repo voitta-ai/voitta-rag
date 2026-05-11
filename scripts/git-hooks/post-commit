@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+#
+# voitta-rag post-commit hook: pings the local voitta-rag instance to
+# re-sync (and re-run llm-tldr analysis) for a configured folder after
+# every commit. See "Advanced > Git post-commit hook" in the voitta-rag
+# README for installation instructions.
+#
+# Required environment variables:
+#   VOITTA_RAG_URL          e.g. http://localhost:58000
+#   VOITTA_RAG_FOLDER       voitta-rag folder_path the Git source is configured under
+#                           (e.g. "my-repo" or "vrag-test-4")
+#   VOITTA_HOOK_SECRET      same value as VOITTA_HOOK_SECRET on the voitta-rag server
+#
+# Optional:
+#   VOITTA_HOOK_TIMEOUT     curl --max-time, default 5 (seconds)
+#   VOITTA_HOOK_QUIET       if set, suppress stdout (commit output stays clean)
+#
+# The hook returns 0 unconditionally so a sync failure never blocks a
+# commit. Look at voitta-rag's logs/app.log for sync errors.
+
+set -u
+
+# Bail out cleanly if the hook isn't configured. Lets the same hook
+# file live in repos that aren't synced to voitta-rag.
+if [[ -z "${VOITTA_RAG_URL:-}" \
+   || -z "${VOITTA_RAG_FOLDER:-}" \
+   || -z "${VOITTA_HOOK_SECRET:-}" ]]; then
+    exit 0
+fi
+
+VOITTA_HOOK_TIMEOUT="${VOITTA_HOOK_TIMEOUT:-5}"
+
+URL="${VOITTA_RAG_URL%/}/api/sync/_hook/sync/${VOITTA_RAG_FOLDER}"
+
+# Fire and forget. Sync runs in the background on the voitta-rag side,
+# so the curl returns as soon as the trigger is accepted.
+if [[ -n "${VOITTA_HOOK_QUIET:-}" ]]; then
+    curl -fsS \
+        -X POST \
+        --max-time "$VOITTA_HOOK_TIMEOUT" \
+        -H "X-Voitta-Hook-Secret: ${VOITTA_HOOK_SECRET}" \
+        "$URL" >/dev/null 2>&1 || true
+else
+    response=$(curl -fsS \
+        -X POST \
+        --max-time "$VOITTA_HOOK_TIMEOUT" \
+        -H "X-Voitta-Hook-Secret: ${VOITTA_HOOK_SECRET}" \
+        "$URL" 2>&1) || true
+    if [[ -n "$response" ]]; then
+        echo "[voitta-rag] $response"
+    fi
+fi
+
+exit 0
