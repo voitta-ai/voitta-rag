@@ -183,10 +183,45 @@ class VectorStoreService:
         except Exception as e:
             logger.warning(f"Failed to ensure companion-chunk indexes: {e}")
 
+    def delete_by_folder_and_related_file(
+        self, folder_path: str, related_file: str,
+    ) -> int:
+        """Delete chunks for a companion analysis tied to one source file.
+
+        Used by the incremental llm-tldr indexer when a single file is
+        changed or removed.
+        """
+        flt = qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="folder_path",
+                    match=qmodels.MatchValue(value=folder_path),
+                ),
+                qmodels.FieldCondition(
+                    key="related_file",
+                    match=qmodels.MatchValue(value=related_file),
+                ),
+            ]
+        )
+        count_result = self.client.count(
+            collection_name=self.collection_name, count_filter=flt,
+        )
+        count = count_result.count
+        if count > 0:
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=qmodels.FilterSelector(filter=flt),
+            )
+            logger.info(
+                f"Deleted {count} companion chunks for "
+                f"folder={folder_path}, related_file={related_file}",
+            )
+        return count
+
     def delete_by_folder_and_source_type(self, folder_path: str, source_type: str) -> int:
         """Delete all chunks for a folder with a specific source_type.
 
-        Used to wipe llm-tldr companion chunks before re-indexing.
+        Used to wipe llm-tldr companion chunks (e.g. force reindex).
         """
         flt = qmodels.Filter(
             must=[

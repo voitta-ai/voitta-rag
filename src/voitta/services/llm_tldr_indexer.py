@@ -5,16 +5,19 @@ structural summaries as companion chunks in Qdrant alongside the raw code
 chunks. Each chunk is tagged with ``source_type="llm-tldr-analysis"`` and
 ``related_file`` pointing back to the originating source file.
 
-Phase 1 (PoC): delete-and-replace per sync. Incremental reindexing arrives
-in phase 2 of issue #15.
+Phase 2: per-file incremental reindex. Source files are hashed; only files
+whose hash changed (or are newly added or removed) trigger an extract /
+chunk / store cycle. Set ``force=True`` to wipe and re-extract everything
+(useful after an llm-tldr library bump).
 """
 
+import hashlib
 import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from ..db.models import LlmTldrIndexedFile
@@ -61,21 +64,30 @@ class LlmTldrIndexer:
         folder_path: str,
         index_folder: str,
         db: Session,
+        force: bool = False,
     ) -> dict:
-        """Run llm-tldr analysis over ``repo_dir`` and index companion chunks.
+        """Incrementally re-index llm-tldr companion chunks for ``repo_dir``.
+
+        Compares current source-file SHA-256 hashes against the
+        ``LlmTldrIndexedFile`` rows previously recorded for ``folder_path``
+        and only re-extracts the analysis for files that are new, changed,
+        or removed.
 
         Args:
             repo_dir: Local directory containing the cloned source files.
             folder_path: Voitta-RAG folder_path the chunks belong to (e.g.
-                "myrepo/branches/main"). All companion chunks for this folder
-                are wiped and replaced.
+                "myrepo/branches/main"). Companion chunks for this folder
+                are scoped by this value.
             index_folder: Folder at which indexing was triggered (the
                 top-level Git source folder, used for filtered searches).
             db: Active SQLAlchemy session.
+            force: If True, wipes every companion chunk for the folder and
+                re-extracts every file. Use after an llm-tldr library bump
+                or when the rendering format changes.
 
         Returns:
-            Stats dict with files_analyzed, files_skipped, chunks_stored,
-            errors counts.
+            Stats dict with files_new, files_updated, files_removed,
+            files_unchanged, files_skipped, chunks_stored, errors counts.
         """
         try:
             from tldr.api import extract_file  # type: ignore
@@ -84,37 +96,72 @@ class LlmTldrIndexer:
                 "llm-tldr is not installed; skipping companion indexing: %s", e,
             )
             return {
-                "files_analyzed": 0, "files_skipped": 0,
+                "files_new": 0, "files_updated": 0, "files_removed": 0,
+                "files_unchanged": 0, "files_skipped": 0,
                 "chunks_stored": 0, "errors": 1,
             }
 
         stats = {
-            "files_analyzed": 0, "files_skipped": 0,
+            "files_new": 0, "files_updated": 0, "files_removed": 0,
+            "files_unchanged": 0, "files_skipped": 0,
             "chunks_stored": 0, "errors": 0,
         }
 
-        deleted = self.vector_store.delete_by_folder_and_source_type(
-            folder_path, SOURCE_TYPE,
-        )
-        logger.info(
-            "llm-tldr: wiped %d stale companion chunks for %s",
-            deleted, folder_path,
-        )
-        db.execute(
-            delete(LlmTldrIndexedFile).where(
+        if force:
+            wiped = self.vector_store.delete_by_folder_and_source_type(
+                folder_path, SOURCE_TYPE,
+            )
+            logger.info(
+                "llm-tldr: force=True wiped %d chunks for %s", wiped, folder_path,
+            )
+            db.execute(
+                delete(LlmTldrIndexedFile).where(
+                    LlmTldrIndexedFile.folder_path == folder_path
+                )
+            )
+            db.flush()
+
+        # Snapshot known state from the DB.
+        existing_rows = db.execute(
+            select(LlmTldrIndexedFile).where(
                 LlmTldrIndexedFile.folder_path == folder_path
             )
-        )
-        db.flush()
+        ).scalars().all()
+        existing_by_rel: dict[str, LlmTldrIndexedFile] = {
+            row.related_file: row for row in existing_rows
+        }
 
+        # Snapshot current source-file hashes.
         files = _collect_source_files(repo_dir)
-        logger.info(
-            "llm-tldr: analyzing %d source files under %s",
-            len(files), repo_dir,
-        )
-
+        current_hashes: dict[str, str] = {}
         for src in files:
             rel = str(src.relative_to(repo_dir))
+            try:
+                current_hashes[rel] = _hash_file(src)
+            except OSError as e:
+                logger.debug("llm-tldr: unreadable %s: %s", rel, e)
+                stats["files_skipped"] += 1
+
+        logger.info(
+            "llm-tldr: scanning %s — %d source files on disk, %d previously indexed",
+            folder_path, len(current_hashes), len(existing_by_rel),
+        )
+
+        # Removed files: in DB, not on disk → delete their chunks + rows.
+        removed = set(existing_by_rel) - set(current_hashes)
+        for rel in removed:
+            self.vector_store.delete_by_folder_and_related_file(folder_path, rel)
+            db.delete(existing_by_rel[rel])
+            stats["files_removed"] += 1
+
+        # New / changed files: extract, store, upsert row.
+        for rel, source_hash in current_hashes.items():
+            existing_row = existing_by_rel.get(rel)
+            if existing_row is not None and existing_row.content_hash == source_hash:
+                stats["files_unchanged"] += 1
+                continue
+
+            src = repo_dir / rel
             try:
                 info = extract_file(str(src), base_path=str(repo_dir))
             except Exception as e:
@@ -126,6 +173,12 @@ class LlmTldrIndexer:
             if not text.strip():
                 stats["files_skipped"] += 1
                 continue
+
+            # Replace any prior chunks for this file before reinserting.
+            if existing_row is not None:
+                self.vector_store.delete_by_folder_and_related_file(
+                    folder_path, rel,
+                )
 
             try:
                 chunks_stored = self._store_chunks(
@@ -141,16 +194,21 @@ class LlmTldrIndexer:
                 stats["errors"] += 1
                 continue
 
-            content_hash = _hash_text(text)
-            db.add(
-                LlmTldrIndexedFile(
-                    folder_path=folder_path,
-                    related_file=rel,
-                    content_hash=content_hash,
-                    chunk_count=chunks_stored,
+            if existing_row is None:
+                db.add(
+                    LlmTldrIndexedFile(
+                        folder_path=folder_path,
+                        related_file=rel,
+                        content_hash=source_hash,
+                        chunk_count=chunks_stored,
+                    )
                 )
-            )
-            stats["files_analyzed"] += 1
+                stats["files_new"] += 1
+            else:
+                existing_row.content_hash = source_hash
+                existing_row.chunk_count = chunks_stored
+                existing_row.updated_at = datetime.now(timezone.utc)
+                stats["files_updated"] += 1
             stats["chunks_stored"] += chunks_stored
 
         db.commit()
@@ -305,9 +363,13 @@ def _render_class(cls) -> str:
     return "\n".join(parts)
 
 
-def _hash_text(text: str) -> str:
-    import hashlib
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def _hash_file(path: Path) -> str:
+    """SHA-256 hash of the file's raw bytes."""
+    sha = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            sha.update(chunk)
+    return sha.hexdigest()
 
 
 def get_llm_tldr_indexer() -> LlmTldrIndexer:
