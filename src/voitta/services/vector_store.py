@@ -82,10 +82,21 @@ class VectorStoreService:
 
     @property
     def client(self) -> QdrantClient:
-        """Lazy load the Qdrant client."""
+        """Lazy load the Qdrant client.
+
+        qdrant-client defaults its HTTP timeout to 5 seconds, which is
+        fine for vector search but too tight for filtered ``delete`` /
+        ``count`` against a large collection — payload-index filter
+        compilation alone routinely takes >5s on collections with
+        >1M points. The llm-tldr companion indexer (Phase 2+) issues
+        per-file ``delete`` calls; raising the timeout keeps those
+        within budget without making fast paths any slower.
+        """
         if self._client is None:
             logger.info(f"Connecting to Qdrant at {self.host}:{self.port}")
-            self._client = QdrantClient(host=self.host, port=self.port)
+            self._client = QdrantClient(
+                host=self.host, port=self.port, timeout=60,
+            )
             self._ensure_collection()
         return self._client
 
