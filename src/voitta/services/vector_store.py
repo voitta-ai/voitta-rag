@@ -528,7 +528,15 @@ class VectorStoreService:
         return count
 
     def get_file_paths_by_index_folder(self, index_folder: str) -> set[str]:
-        """Return all unique file_path values in Qdrant for a given index_folder."""
+        """Return all unique file_path values in Qdrant for a given index_folder.
+
+        Excludes companion chunks (chunks where ``source_type`` is set, e.g.
+        ``llm-tldr-analysis``). Companion chunks have synthetic ``file_path``
+        values (e.g. ``llm-tldr://...``) that do not appear in the
+        ``IndexedFile`` table, and including them here would make the
+        IndexingService.sync_folder orphan-cleanup pass delete every
+        companion chunk on every sync.
+        """
         file_paths: set[str] = set()
         offset = None
         while True:
@@ -539,8 +547,11 @@ class VectorStoreService:
                         qmodels.FieldCondition(
                             key="index_folder",
                             match=qmodels.MatchValue(value=index_folder),
-                        )
-                    ]
+                        ),
+                        qmodels.IsEmptyCondition(
+                            is_empty=qmodels.PayloadField(key="source_type"),
+                        ),
+                    ],
                 ),
                 limit=1000,
                 offset=offset,
