@@ -39,6 +39,12 @@ class ChunkMetadata:
     allowed_users: list[str] | None = None
     # Source URL: original external URL (e.g. Google Docs link) for this document
     source_url: str | None = None
+    # Companion-chunk fields. When source_type is set, this chunk did not come
+    # from a literal file but from auxiliary analysis (e.g. llm-tldr static
+    # analysis). related_file points back to the original source file the
+    # analysis was derived from.
+    source_type: str | None = None
+    related_file: str | None = None
 
 
 @dataclass
@@ -84,6 +90,7 @@ class VectorStoreService:
             self._ensure_timestamp_indexes()
             self._ensure_acl_index()
             self._ensure_source_url_index()
+            self._ensure_companion_chunk_indexes()
         except (UnexpectedResponse, Exception):
             logger.info(f"Creating collection '{self.collection_name}'")
             self._client.create_collection(
@@ -99,7 +106,7 @@ class VectorStoreService:
                 },
             )
             # Create payload indexes for efficient filtering
-            for field in ("file_path", "folder_path", "index_folder", "allowed_users", "source_url"):
+            for field in ("file_path", "folder_path", "index_folder", "allowed_users", "source_url", "source_type", "related_file"):
                 self._client.create_payload_index(
                     collection_name=self.collection_name,
                     field_name=field,
@@ -159,6 +166,53 @@ class VectorStoreService:
                 logger.info(f"Created index for 'source_url' on '{self.collection_name}'")
         except Exception as e:
             logger.warning(f"Failed to ensure source_url index: {e}")
+
+    def _ensure_companion_chunk_indexes(self) -> None:
+        """Create KEYWORD payload indexes for source_type and related_file if missing."""
+        try:
+            info = self._client.get_collection(self.collection_name)
+            existing = set(info.payload_schema.keys()) if info.payload_schema else set()
+            for field in ("source_type", "related_file"):
+                if field not in existing:
+                    self._client.create_payload_index(
+                        collection_name=self.collection_name,
+                        field_name=field,
+                        field_schema=qmodels.PayloadSchemaType.KEYWORD,
+                    )
+                    logger.info(f"Created index for '{field}' on '{self.collection_name}'")
+        except Exception as e:
+            logger.warning(f"Failed to ensure companion-chunk indexes: {e}")
+
+    def delete_by_folder_and_source_type(self, folder_path: str, source_type: str) -> int:
+        """Delete all chunks for a folder with a specific source_type.
+
+        Used to wipe llm-tldr companion chunks before re-indexing.
+        """
+        flt = qmodels.Filter(
+            must=[
+                qmodels.FieldCondition(
+                    key="folder_path",
+                    match=qmodels.MatchValue(value=folder_path),
+                ),
+                qmodels.FieldCondition(
+                    key="source_type",
+                    match=qmodels.MatchValue(value=source_type),
+                ),
+            ]
+        )
+        count_result = self.client.count(
+            collection_name=self.collection_name, count_filter=flt,
+        )
+        count = count_result.count
+        if count > 0:
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=qmodels.FilterSelector(filter=flt),
+            )
+            logger.info(
+                f"Deleted {count} '{source_type}' chunks for folder: {folder_path}"
+            )
+        return count
 
     def find_by_source_url(self, source_url: str) -> list[StoredChunk]:
         """Find all chunks matching a given source_url.
@@ -286,6 +340,11 @@ class VectorStoreService:
             # Add source URL if present
             if metadata.source_url is not None:
                 payload["source_url"] = metadata.source_url
+            # Add companion-chunk fields if present
+            if metadata.source_type is not None:
+                payload["source_type"] = metadata.source_type
+            if metadata.related_file is not None:
+                payload["related_file"] = metadata.related_file
 
             # Build vector: unnamed dense + optional sparse
             if sparse_vectors and idx < len(sparse_vectors):
@@ -553,6 +612,8 @@ class VectorStoreService:
                 source_modified_at=payload.get("source_modified_at"),
                 allowed_users=payload.get("allowed_users"),
                 source_url=payload.get("source_url"),
+                source_type=payload.get("source_type"),
+                related_file=payload.get("related_file"),
             ),
             score=result.score,
         )

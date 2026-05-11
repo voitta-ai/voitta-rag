@@ -30,3 +30,6 @@ boto3>=1.28.0
 
 # MCP server
 fastmcp>=0.4.0
+
+# Static analysis (optional companion indexing for Git sources, see issue #15)
+llm-tldr>=0.1.0

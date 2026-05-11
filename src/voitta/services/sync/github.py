@@ -345,6 +345,28 @@ def _render_gh_run_md(run: dict, jobs: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _run_llm_tldr_indexing(local_root: Path, folder_path: str) -> dict:
+    """Run llm-tldr companion indexing in a worker thread.
+
+    Spawned via asyncio.to_thread so it can use a sync DB Session and the
+    sync embedding/vector-store services without blocking the event loop.
+    """
+    from sqlalchemy.orm import Session
+
+    from ...db.database import get_sync_engine
+    from ..llm_tldr_indexer import get_llm_tldr_indexer
+
+    indexer = get_llm_tldr_indexer()
+    engine = get_sync_engine()
+    with Session(engine) as db:
+        return indexer.index_repo(
+            repo_dir=local_root,
+            folder_path=folder_path,
+            index_folder=folder_path,
+            db=db,
+        )
+
+
 class GitHubConnector(BaseSyncConnector):
     """Sync connector that uses git clone/pull for public, SSH, and token repos."""
 
@@ -517,6 +539,9 @@ class GitHubConnector(BaseSyncConnector):
           mirrored into the local folder.
         - If gh_all_branches is set, all remote branches are synced into
           branches/<branch_name>/ subfolders.
+        - If gh_llm_tldr is set, after the mirror finishes, runs llm-tldr
+          static analysis over the synced files and stores the structural
+          summaries as companion chunks in Qdrant.
         """
         folder_path = source.folder_path
         local_root = fs._resolve_path(folder_path)
@@ -529,21 +554,28 @@ class GitHubConnector(BaseSyncConnector):
             raise ValueError("Git repository URL is required")
 
         if getattr(source, "gh_all_branches", False):
-            return await self._sync_all_branches(
+            stats = await self._sync_all_branches(
                 source, repo_url, local_root, subfolder, folder_path,
                 keep_extensions,
             )
+        else:
+            branch = source.gh_branch or "main"
+            safe_name = branch.replace("/", "--")
+            branches_dir = local_root / "branches"
+            branches_dir.mkdir(parents=True, exist_ok=True)
+            branch_root = branches_dir / safe_name
+            branch_root.mkdir(parents=True, exist_ok=True)
+            stats = await self._sync_single_branch(
+                source, repo_url, branch, branch_root, subfolder, keep_extensions,
+            )
+            logger.info("Git sync complete for %s: %s", folder_path, stats)
 
-        branch = source.gh_branch or "main"
-        safe_name = branch.replace("/", "--")
-        branches_dir = local_root / "branches"
-        branches_dir.mkdir(parents=True, exist_ok=True)
-        branch_root = branches_dir / safe_name
-        branch_root.mkdir(parents=True, exist_ok=True)
-        stats = await self._sync_single_branch(
-            source, repo_url, branch, branch_root, subfolder, keep_extensions,
-        )
-        logger.info("Git sync complete for %s: %s", folder_path, stats)
+        if getattr(source, "gh_llm_tldr", False):
+            tldr_stats = await asyncio.to_thread(
+                _run_llm_tldr_indexing, local_root, folder_path,
+            )
+            stats["llm_tldr"] = tldr_stats
+
         return stats
 
     async def _sync_all_branches(
