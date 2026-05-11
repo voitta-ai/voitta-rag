@@ -12,7 +12,6 @@ chunk / store cycle. Set ``force=True`` to wipe and re-extract everything
 """
 
 import hashlib
-import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -176,8 +175,8 @@ class LlmTldrIndexer:
                 stats["files_skipped"] += 1
                 continue
 
-            text = _render_extract(rel, info)
-            if not text.strip():
+            parts = _build_chunk_parts(rel, info)
+            if not parts:
                 stats["files_skipped"] += 1
                 continue
 
@@ -188,8 +187,8 @@ class LlmTldrIndexer:
                 )
 
             try:
-                chunks_stored = self._store_chunks(
-                    text=text,
+                chunks_stored = self._store_chunk_parts(
+                    parts=parts,
                     related_file=rel,
                     folder_path=folder_path,
                     index_folder=index_folder,
@@ -222,42 +221,58 @@ class LlmTldrIndexer:
         logger.info("llm-tldr: indexing complete for %s: %s", folder_path, stats)
         return stats
 
-    def _store_chunks(
+    def _store_chunk_parts(
         self,
-        text: str,
+        parts: list[tuple[str, dict]],
         related_file: str,
         folder_path: str,
         index_folder: str,
     ) -> int:
-        chunks = self.chunker.chunk_text(text)
-        if not chunks:
+        """Embed and store pre-built (text, payload-overrides) tuples.
+
+        Each part becomes one Qdrant point. The text body goes through
+        the dense+sparse embedder; ``payload_overrides`` contains the
+        Phase 3 call-graph fields specific to that chunk (function name,
+        callers/callees, etc.).
+        """
+        if not parts:
             return 0
 
-        texts = [c.text for c in chunks]
+        texts = [text for text, _ in parts]
         embeddings = self.embedder.embed_texts(texts)
         sparse_vectors = self.sparse_embedder.embed_texts(texts)
 
         indexed_at = datetime.now(timezone.utc).isoformat()
         synthetic_path = f"llm-tldr://{folder_path}/{related_file}"
         chunk_data = []
-        for chunk, embedding in zip(chunks, embeddings):
+        for idx, ((text, payload_overrides), embedding) in enumerate(
+            zip(parts, embeddings)
+        ):
             metadata = ChunkMetadata(
                 file_path=synthetic_path,
                 folder_path=folder_path,
                 index_folder=index_folder,
                 file_name=Path(related_file).name + ".tldr.md",
-                chunk_index=chunk.index,
-                total_chunks=len(chunks),
-                start_char=chunk.start_char,
-                end_char=chunk.end_char,
+                chunk_index=idx,
+                total_chunks=len(parts),
+                start_char=0,
+                end_char=len(text),
                 indexed_at=indexed_at,
                 source_type=SOURCE_TYPE,
                 related_file=related_file,
+                tldr_chunk_kind=payload_overrides.get("tldr_chunk_kind"),
+                tldr_function_name=payload_overrides.get("tldr_function_name"),
+                tldr_class_name=payload_overrides.get("tldr_class_name"),
+                tldr_callees=payload_overrides.get("tldr_callees"),
+                tldr_callers=payload_overrides.get("tldr_callers"),
+                tldr_caller_count=payload_overrides.get("tldr_caller_count"),
+                tldr_callee_count=payload_overrides.get("tldr_callee_count"),
+                tldr_imports=payload_overrides.get("tldr_imports"),
             )
-            chunk_data.append((chunk.text, embedding, metadata))
+            chunk_data.append((text, embedding, metadata))
 
         self.vector_store.store_chunks(chunk_data, sparse_vectors=sparse_vectors)
-        return len(chunks)
+        return len(chunk_data)
 
 
 def _collect_source_files(repo_dir: Path) -> list[Path]:
@@ -278,101 +293,152 @@ def _collect_source_files(repo_dir: Path) -> list[Path]:
     return files
 
 
-def _render_extract(rel_path: str, info: dict) -> str:
-    """Render an llm-tldr extract_file dict as markdown text for chunking."""
-    lines: list[str] = []
-    lines.append(f"# llm-tldr analysis: {rel_path}")
+# Bumped whenever the analysis chunk format changes. Mixed into
+# _hash_file so existing rows whose content_hash was computed under a
+# previous format will mismatch and trigger a re-extract on the next
+# sync. v1: file-level rendered markdown (Phase 1+2). v3: per-function
+# chunks + call-graph payload (Phase 3).
+ANALYSIS_FORMAT_VERSION = "v3"
+
+
+def _build_chunk_parts(rel_path: str, info: dict) -> list[tuple[str, dict]]:
+    """Build (text, payload-overrides) tuples for one source file.
+
+    Emits one file_overview chunk plus one function chunk per top-level
+    function and per class method. Each function chunk carries the
+    structured call-graph payload (callers, callees, counts, imports)
+    needed for Phase 3 filtered searches.
+    """
+    parts: list[tuple[str, dict]] = []
+
+    # File overview
+    imports_list = _normalize_imports(info.get("imports") or [])
     lang = info.get("language") or "unknown"
-    lines.append(f"Language: {lang}")
+    overview_lines = [f"# llm-tldr file overview: {rel_path}"]
+    overview_lines.append(f"Language: {lang}")
     docstring = info.get("docstring")
     if docstring:
-        lines.append("")
-        lines.append("## Module docstring")
-        lines.append(docstring.strip())
-
-    imports = info.get("imports") or []
-    if imports:
-        lines.append("")
-        lines.append("## Imports")
-        for imp in imports:
-            lines.append(f"- {_render_import(imp)}")
-
-    functions = info.get("functions") or []
-    if functions:
-        lines.append("")
-        lines.append("## Functions")
-        for fn in functions:
-            lines.append(_render_function(fn))
-
-    classes = info.get("classes") or []
-    if classes:
-        lines.append("")
-        lines.append("## Classes")
-        for cls in classes:
-            lines.append(_render_class(cls))
+        overview_lines.append("")
+        overview_lines.append(docstring.strip())
+    if imports_list:
+        overview_lines.append("")
+        overview_lines.append("Imports: " + ", ".join(imports_list))
+    class_names = [
+        c.get("name") for c in (info.get("classes") or [])
+        if isinstance(c, dict) and c.get("name")
+    ]
+    if class_names:
+        overview_lines.append("Classes: " + ", ".join(class_names))
+    func_names = [
+        f.get("name") for f in (info.get("functions") or [])
+        if isinstance(f, dict) and f.get("name")
+    ]
+    if func_names:
+        overview_lines.append("Top-level functions: " + ", ".join(func_names))
+    parts.append((
+        "\n".join(overview_lines),
+        {
+            "tldr_chunk_kind": "file_overview",
+            "tldr_imports": imports_list or None,
+        },
+    ))
 
     call_graph = info.get("call_graph") or {}
-    if call_graph:
-        lines.append("")
-        lines.append("## Call graph")
-        lines.append("```json")
-        lines.append(json.dumps(call_graph, indent=2, default=str))
-        lines.append("```")
+    calls_map = call_graph.get("calls") or {}
+    called_by_map = call_graph.get("called_by") or {}
 
-    return "\n".join(lines)
+    # Top-level functions
+    for fn in info.get("functions") or []:
+        part = _build_function_part(
+            fn, class_name=None, rel_path=rel_path,
+            imports_list=imports_list,
+            calls_map=calls_map, called_by_map=called_by_map,
+        )
+        if part is not None:
+            parts.append(part)
+
+    # Class methods
+    for cls in info.get("classes") or []:
+        if not isinstance(cls, dict):
+            continue
+        cls_name = cls.get("name") or "(anonymous)"
+        for method in cls.get("methods") or []:
+            part = _build_function_part(
+                method, class_name=cls_name, rel_path=rel_path,
+                imports_list=imports_list,
+                calls_map=calls_map, called_by_map=called_by_map,
+            )
+            if part is not None:
+                parts.append(part)
+
+    return parts
 
 
-def _render_import(imp) -> str:
-    if isinstance(imp, dict):
-        module = imp.get("module") or imp.get("name") or ""
-        names = imp.get("names") or []
-        if names:
-            return f"{module} ({', '.join(map(str, names))})"
-        return str(module)
-    return str(imp)
-
-
-def _render_function(fn) -> str:
+def _build_function_part(
+    fn,
+    class_name: str | None,
+    rel_path: str,
+    imports_list: list[str],
+    calls_map: dict,
+    called_by_map: dict,
+) -> tuple[str, dict] | None:
     if not isinstance(fn, dict):
-        return f"- {fn}"
-    parts: list[str] = []
-    sig = fn.get("signature") or fn.get("name") or ""
-    parts.append(f"### {sig}")
-    if fn.get("docstring"):
-        parts.append(fn["docstring"].strip())
-    calls = fn.get("calls") or []
-    if calls:
-        parts.append(f"Calls: {', '.join(map(str, calls))}")
-    called_by = fn.get("called_by") or []
-    if called_by:
-        parts.append(f"Called by: {', '.join(map(str, called_by))}")
-    complexity = fn.get("complexity")
-    if complexity is not None:
-        parts.append(f"Cyclomatic complexity: {complexity}")
-    return "\n".join(parts)
+        return None
+    name = fn.get("name") or ""
+    if not name:
+        return None
+    key = f"{class_name}.{name}" if class_name else name
+    callees = list(calls_map.get(key) or [])
+    callers = list(called_by_map.get(key) or [])
+    sig = fn.get("signature") or name
+    lines = [f"# llm-tldr function: {key} (in {rel_path})"]
+    lines.append(f"Signature: {sig}")
+    if fn.get("is_async"):
+        lines.append("Async: True")
+    docstring = fn.get("docstring")
+    if docstring:
+        lines.append("")
+        lines.append(docstring.strip())
+    if callees:
+        lines.append("")
+        lines.append(f"Calls: {', '.join(callees)}")
+    if callers:
+        lines.append(f"Called by: {', '.join(callers)}")
+    text = "\n".join(lines)
+    payload = {
+        "tldr_chunk_kind": "function",
+        "tldr_function_name": name,
+        "tldr_class_name": class_name,
+        "tldr_callees": callees or None,
+        "tldr_callers": callers or None,
+        "tldr_caller_count": len(callers),
+        "tldr_callee_count": len(callees),
+        "tldr_imports": imports_list or None,
+    }
+    return (text, payload)
 
 
-def _render_class(cls) -> str:
-    if not isinstance(cls, dict):
-        return f"- {cls}"
-    parts: list[str] = []
-    name = cls.get("name") or "(anonymous)"
-    bases = cls.get("bases") or cls.get("base_classes") or []
-    header = f"### class {name}"
-    if bases:
-        header += f"({', '.join(map(str, bases))})"
-    parts.append(header)
-    if cls.get("docstring"):
-        parts.append(cls["docstring"].strip())
-    methods = cls.get("methods") or []
-    for m in methods:
-        parts.append(_render_function(m))
-    return "\n".join(parts)
+def _normalize_imports(imports) -> list[str]:
+    """Reduce llm-tldr's import entries to a flat list of module names."""
+    out: list[str] = []
+    for imp in imports:
+        if isinstance(imp, dict):
+            mod = imp.get("module") or imp.get("name")
+            if mod:
+                out.append(str(mod))
+        elif imp:
+            out.append(str(imp))
+    return out
 
 
 def _hash_file(path: Path) -> str:
-    """SHA-256 hash of the file's raw bytes."""
+    """SHA-256 hash of the file's raw bytes, salted with the analysis
+    format version. A format-version bump invalidates all stored hashes
+    so the next sync re-extracts every file into the new format.
+    """
     sha = hashlib.sha256()
+    sha.update(ANALYSIS_FORMAT_VERSION.encode("ascii"))
+    sha.update(b"\0")
     with open(path, "rb") as f:
         for chunk in iter(lambda: f.read(8192), b""):
             sha.update(chunk)
