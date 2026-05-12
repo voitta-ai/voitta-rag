@@ -1067,6 +1067,7 @@ function populateSyncFields(data) {
         document.getElementById('gh-username').value = data.github.username || '';
         document.getElementById('gh-pat').value = data.github.token || '';
         document.getElementById('gh-all-branches').checked = !!data.github.all_branches;
+        document.getElementById('gh-llm-tldr').checked = !!data.github.llm_tldr;
         toggleGhAuth();
         toggleAllBranches();
         // Fetch branches and pre-select the saved one
@@ -1309,6 +1310,7 @@ function gatherSyncConfig() {
             username: document.getElementById('gh-username').value.trim(),
             token: document.getElementById('gh-pat').value.trim(),
             all_branches: document.getElementById('gh-all-branches').checked,
+            llm_tldr: document.getElementById('gh-llm-tldr').checked,
         };
     } else if (sourceType === 'azure_devops') {
         config.azure_devops = {

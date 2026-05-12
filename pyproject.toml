@@ -40,6 +40,8 @@ dependencies = [
     "google-auth>=2.23.0",
     # AWS
     "boto3>=1.28.0",
+    # Static analysis (optional companion indexing for Git sources, see issue #15)
+    "llm-tldr>=0.1.0",
 ]
 
 [project.optional-dependencies]

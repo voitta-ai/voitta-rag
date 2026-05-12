@@ -3,7 +3,10 @@
 import base64
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, status
+import os
+import secrets as _secrets
+
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException, Query, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -50,6 +53,7 @@ class GitHubConfig(BaseModel):
     username: str = ""  # For token auth (e.g. GitHub username or x-access-token)
     token: str = ""  # Personal access token (PAT)
     all_branches: bool = False
+    llm_tldr: bool = False  # Run llm-tldr static analysis on synced repo
 
 
 class AzureDevOpsConfig(BaseModel):
@@ -187,6 +191,7 @@ def _to_response(source: FolderSyncSource) -> SyncSourceResponse:
             username=source.gh_username or "",
             token=source.gh_pat or "",
             all_branches=source.gh_all_branches or False,
+            llm_tldr=source.gh_llm_tldr or False,
         )
     elif source.source_type == "azure_devops":
         ado = AzureDevOpsConfig(
@@ -774,6 +779,62 @@ async def trigger_sync(
     )
 
 
+@router.post("/_hook/sync/{path:path}", response_model=SyncTriggerResponse)
+async def hook_trigger_sync(
+    path: str,
+    db: DB,
+    background_tasks: BackgroundTasks,
+    x_voitta_hook_secret: str = Header(default=""),
+):
+    """Trigger a sync from an out-of-process hook (e.g. git post-commit).
+
+    Authenticated by the ``X-Voitta-Hook-Secret`` request header, which
+    is compared in constant time against the ``VOITTA_HOOK_SECRET``
+    environment variable. The route is intentionally NOT cookie-gated so
+    a shell script can call it from a developer's git post-commit hook
+    without needing a logged-in browser session. When the env var is
+    unset the route is disabled (returns 403) — opt-in by design.
+
+    Body and response shape match the regular ``/{path}/trigger``
+    endpoint.
+    """
+    expected = os.getenv("VOITTA_HOOK_SECRET", "")
+    if not expected:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="VOITTA_HOOK_SECRET is not set; hook endpoint disabled",
+        )
+    if not _secrets.compare_digest(expected, x_voitta_hook_secret):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="invalid hook secret",
+        )
+
+    result = await db.execute(
+        select(FolderSyncSource).where(FolderSyncSource.folder_path == path)
+    )
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No sync source configured for this folder",
+        )
+
+    if source.sync_status == "syncing":
+        return SyncTriggerResponse(
+            folder_path=path, status="syncing", message="Sync already in progress"
+        )
+
+    source.sync_status = "syncing"
+    source.sync_error = None
+    await db.flush()
+    background_tasks.add_task(_run_sync, path)
+
+    return SyncTriggerResponse(
+        folder_path=path, status="syncing", message="Sync started",
+    )
+
+
 @router.get("/{path:path}", response_model=SyncSourceResponse | None)
 async def get_sync_source(path: str, user: CurrentUser, db: DB):
     """Get sync configuration for a folder."""
@@ -837,6 +898,7 @@ async def upsert_sync_source(
         "gd_service_account_json", "gd_folder_id", "gd_client_id", "gd_client_secret",
         "gh_token", "gh_repo", "gh_branch", "gh_path",
         "gh_auth_method", "gh_username", "gh_pat", "gh_all_branches",
+        "gh_llm_tldr",
         "ado_tenant_id", "ado_client_id", "ado_client_secret",
         "ado_organization", "ado_project", "ado_url",
         "jira_url", "jira_project", "jira_token", "jira_auth_method", "jira_email",
@@ -876,6 +938,7 @@ async def upsert_sync_source(
         source.gh_username = request.github.username
         source.gh_pat = request.github.token
         source.gh_all_branches = request.github.all_branches
+        source.gh_llm_tldr = request.github.llm_tldr
     elif request.source_type == "azure_devops" and request.azure_devops:
         from ...services.sync.azure_devops import _parse_ado_url
         source.ado_tenant_id = request.azure_devops.tenant_id
@@ -991,10 +1054,20 @@ async def delete_sync_source(path: str, user: CurrentUser, db: DB):
 
 
 async def _run_sync(folder_path: str):
-    """Run sync in background."""
+    """Run sync in background.
+
+    The async DB session is held only across short read / write windows.
+    The long-running ``connector.sync()`` call runs with NO async session
+    open, so the shared file-lock from a pending read transaction does
+    not block sync-worker sub-tasks (e.g. the llm-tldr indexer running in
+    a thread via a sync ``Session``) under journal_mode=DELETE. Under WAL
+    a long-lived read txn was harmless; under DELETE it serialises every
+    other writer.
+    """
     from ...services.filesystem import FilesystemService
     from ...services.watcher import file_watcher
 
+    # Step 1: load source, detach, close session.
     async with get_db_context() as db:
         result = await db.execute(
             select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
@@ -1002,73 +1075,87 @@ async def _run_sync(folder_path: str):
         source = result.scalar_one_or_none()
         if not source:
             return
+        db.expunge(source)
 
-        # Suppress file watcher events for this folder during sync
-        file_watcher.suppress_path(folder_path)
-        try:
-            connector = get_connector(source.source_type)
-            from ...services.filesystem import get_filesystem_service as _get_fs
-            fs = _get_fs()
-            await connector.sync(source, fs)
+    file_watcher.suppress_path(folder_path)
+    final_status = "synced"
+    final_error: str | None = None
+    last_synced_at = None
 
-            # Post-sync: fetch Teams meeting transcripts for SharePoint sources
-            if source.source_type == "sharepoint":
-                try:
-                    from ...services.sync.teams_transcripts import fetch_transcripts_for_folder
-                    token = await connector._get_access_token(source)
-                    count = await fetch_transcripts_for_folder(source, fs, token)
-                    if count:
-                        logger.info("Fetched %d transcript(s) for %s", count, folder_path)
-                except Exception as e:
-                    logger.warning("Transcript fetch failed for %s: %s", folder_path, e)
+    try:
+        connector = get_connector(source.source_type)
+        from ...services.filesystem import get_filesystem_service as _get_fs
+        fs = _get_fs()
+        await connector.sync(source, fs)
 
-            # Post-sync: reconcile index with new disk state
+        # Post-sync: fetch Teams meeting transcripts for SharePoint sources
+        if source.source_type == "sharepoint":
             try:
-                from ...services.indexing import get_indexing_service
-                from sqlalchemy.orm import Session as SyncSession
-
-                indexing_service = get_indexing_service()
-                with SyncSession(get_sync_engine()) as sync_db:
-                    # Find all indexed/pending subfolders under this folder
-                    result = sync_db.execute(
-                        select(FolderIndexStatus).where(
-                            FolderIndexStatus.folder_path.startswith(folder_path),
-                            FolderIndexStatus.status.in_(["indexed", "pending"]),
-                        )
-                    )
-                    for idx_status in result.scalars().all():
-                        added, removed, _ = indexing_service.sync_folder(
-                            idx_status.folder_path, sync_db
-                        )
-                        if removed:
-                            logger.info(
-                                "Post-sync cleanup [%s]: removed %d stale files",
-                                idx_status.folder_path,
-                                removed,
-                            )
-                    sync_db.commit()
+                from ...services.sync.teams_transcripts import fetch_transcripts_for_folder
+                token = await connector._get_access_token(source)
+                count = await fetch_transcripts_for_folder(source, fs, token)
+                if count:
+                    logger.info("Fetched %d transcript(s) for %s", count, folder_path)
             except Exception as e:
-                logger.warning(
-                    "Post-sync index reconciliation failed for %s: %s",
-                    folder_path,
-                    e,
+                logger.warning("Transcript fetch failed for %s: %s", folder_path, e)
+
+        # Post-sync: reconcile index with new disk state. Uses its own
+        # short sync Session; no async session is open here.
+        try:
+            from ...services.indexing import get_indexing_service
+            from sqlalchemy.orm import Session as SyncSession
+
+            indexing_service = get_indexing_service()
+            with SyncSession(get_sync_engine()) as sync_db:
+                result = sync_db.execute(
+                    select(FolderIndexStatus).where(
+                        FolderIndexStatus.folder_path.startswith(folder_path),
+                        FolderIndexStatus.status.in_(["indexed", "pending"]),
+                    )
                 )
-
-            source.sync_status = "synced"
-            source.sync_error = None
-            source.last_synced_at = utc_now()
+                for idx_status in result.scalars().all():
+                    added, removed, _ = indexing_service.sync_folder(
+                        idx_status.folder_path, sync_db
+                    )
+                    if removed:
+                        logger.info(
+                            "Post-sync cleanup [%s]: removed %d stale files",
+                            idx_status.folder_path,
+                            removed,
+                        )
+                sync_db.commit()
         except Exception as e:
-            logger.exception("Sync failed for %s", folder_path)
-            source.sync_status = "error"
-            source.sync_error = str(e)
-        finally:
-            file_watcher.unsuppress_path(folder_path)
+            logger.warning(
+                "Post-sync index reconciliation failed for %s: %s",
+                folder_path,
+                e,
+            )
 
-        # Broadcast sync status change via WebSocket
-        await file_watcher.broadcast({
-            "type": "sync_status",
-            "path": folder_path,
-            "sync_status": source.sync_status,
-            "sync_error": source.sync_error,
-            "last_synced_at": source.last_synced_at.isoformat() if source.last_synced_at else None,
-        })
+        last_synced_at = utc_now()
+    except Exception as e:
+        logger.exception("Sync failed for %s", folder_path)
+        final_status = "error"
+        final_error = str(e)
+    finally:
+        file_watcher.unsuppress_path(folder_path)
+
+    # Step 2: write final status in a fresh short session.
+    async with get_db_context() as db:
+        result = await db.execute(
+            select(FolderSyncSource).where(FolderSyncSource.folder_path == folder_path)
+        )
+        persisted = result.scalar_one_or_none()
+        if persisted is not None:
+            persisted.sync_status = final_status
+            persisted.sync_error = final_error
+            if final_status == "synced":
+                persisted.last_synced_at = last_synced_at
+            await db.commit()
+
+    await file_watcher.broadcast({
+        "type": "sync_status",
+        "path": folder_path,
+        "sync_status": final_status,
+        "sync_error": final_error,
+        "last_synced_at": last_synced_at.isoformat() if last_synced_at else None,
+    })
