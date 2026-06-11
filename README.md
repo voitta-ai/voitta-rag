@@ -48,7 +48,7 @@ Useful for teams and individuals who want to:
 - Data source connectors: Filesystem (local path mapping), Git, Google Drive, SharePoint, Azure DevOps, Jira, Confluence, Box
 - Jira/Confluence support for both Cloud and Server/Data Center deployments
 - Per-user search scope control per folder
-- Automatic document indexing (DOCX, PPTX, XLSX, ODT, ODP, ODS, GDOC, GSHEET, GSLIDES)
+- Automatic document indexing (DOCX, PPTX, XLSX, ODT, ODP, ODS, GDOC, GSHEET, GSLIDES) — see [Google Drive indexing](docs/google-drive-indexing.md) for how Google Workspace files become searchable
 - Vector search with Qdrant (hybrid semantic + keyword, with time range filtering)
 - MCP server for Claude Code integration
 - Source URL resolution: resolve Google Docs/Sheets/Slides URLs to indexed content via MCP
