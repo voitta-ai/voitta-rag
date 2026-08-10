@@ -195,6 +195,11 @@ def judge_one(client, config, repo_root, record):
 
     messages: list = [{"role": "user", "content": prompt}]
     iterations = 0
+    # Cumulative across the tool loop, not just the final turn. Judging is the
+    # dominant cost of a run -- reporting only the last turn's usage understates
+    # it by roughly the number of iterations.
+    tokens_in = 0
+    tokens_out = 0
 
     while True:
         iterations += 1
@@ -214,6 +219,9 @@ def judge_one(client, config, repo_root, record):
             messages=messages,
         )
 
+        tokens_in += response.usage.input_tokens
+        tokens_out += response.usage.output_tokens
+
         if response.stop_reason == "refusal":
             raise RuntimeError("judge refused: {0}".format(response.stop_details))
 
@@ -227,9 +235,19 @@ def judge_one(client, config, repo_root, record):
                 block.text for block in response.content if block.type == "text"
             )
             scores = json.loads(text)
+            rates = config["pricing_usd_per_mtok"].get(config["judge_model"])
             scores["judge_iterations"] = iterations
-            scores["judge_tokens_in"] = response.usage.input_tokens
-            scores["judge_tokens_out"] = response.usage.output_tokens
+            scores["judge_tokens_in"] = tokens_in
+            scores["judge_tokens_out"] = tokens_out
+            scores["judge_cost_usd"] = (
+                round(
+                    (tokens_in * rates["input"] + tokens_out * rates["output"])
+                    / 1_000_000,
+                    6,
+                )
+                if rates
+                else None
+            )
             return scores
 
         messages.append({"role": "assistant", "content": response.content})

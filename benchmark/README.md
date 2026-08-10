@@ -12,23 +12,26 @@ half. The tracking issues are
 [#108](https://github.com/method-and-apparatus/hq/issues/108), and
 [voitta-rag#49](https://github.com/voitta-ai/voitta-rag/issues/49).
 
-## Why v0 is small
+## Why it started small
 
 The full matrix in the plan is 30 questions x 5 modes = 150 judged runs, gated
-behind an interview-format question-drafting session. It has been specified since
-2026-05-17 and never run. This harness ships the smallest cut that produces real
-numbers -- **1 repo, 5 questions, 3 modes = 15 runs** -- with every dropped axis
-expressible as configuration rather than new code:
+behind an interview-format question-drafting session. It was specified on
+2026-05-17 and sat unrun for ten weeks. v0 shipped the smallest cut that produces
+real numbers -- 1 repo, 5 questions, 3 modes -- and every axis dropped then has
+since been added as configuration plus one builder:
 
-| Axis | v0 | How to expand |
+| Axis | now | How to expand further |
 |---|---|---|
 | Repos | jsoup (unfamiliar) | second `config.json`, or parameterise `repo` |
 | Questions | 5, one per class | append to `questions.jsonl` |
-| Modes | baseline, llm-tldr, voitta-rag | add a builder to `modes.py` + an entry in `BUILDERS` |
-| Chains (tldr -> rag) | not in v0 | a builder that calls two others in sequence |
-| Output-side (caveman) | not in v0 | a second answering pass; orthogonal axis, see hq#88 |
+| Modes | 10 (see `BUILDERS` / `AGENTIC_MODES`) | add a builder + an entry |
+| Chains | tldr -> rag, tldr -> cce | a builder that calls two others in sequence |
+| Output-side | `--caveman-output` | orthogonal to mode; any mode can run in both styles |
 
-Expanding an axis should never require touching `runner.py` or `judge.py`.
+Adding a context builder still requires no change to `runner.py` or `judge.py`.
+The one exception is `AGENTIC_MODES`: `cce` answers by giving the model read-only
+repo tools rather than an injected context string, which is a different
+interaction shape, so `runner.py` dispatches it separately.
 
 ## Layout
 
@@ -39,7 +42,11 @@ Expanding an axis should never require touching `runner.py` or `judge.py`.
 | `modes.py` | one context builder per mode; the only mode-aware code |
 | `runner.py` | runs every (question, mode) pair, writes one JSONL record each |
 | `judge.py` | scores answers with read-only tools over the repo under test |
-| `report.py` | aggregates a scored run into mode x question-class tables |
+| `report.py` | aggregates scored runs into mode x question-class tables |
+
+`runner.py` imports `judge.py` for its `read_file` / `grep` / `glob` tools, which
+the `cce` mode reuses so the exploring model and the verifying judge see the
+repository through exactly the same interface.
 
 ## Setup
 
@@ -76,9 +83,20 @@ Per-mode prerequisites:
   toggle and both are required. Poll `list_indexed_folders` over MCP for progress --
   `GET /api/settings/folders/{path}` returns the toggles only, never the index status.
 
-  Set `voitta_rag_include_folders` to the repo under test. Left `null`, search runs across
-  every indexed folder on the instance, which on a dogfooding instance includes this
-  repository -- the RAG arm would be retrieving over its own source.
+  **`include_folders` does not scope to a subtree.** Over MCP it is an *exact* match on a
+  chunk's `folder_path`, and `folder_path` is the directory the file sits in, not the index
+  root. `mcp_server.search` does contain subtree-prefix expansion, but only on the
+  `if user_name:` branch, and the MCP tool signature has no `user_name` parameter -- so over
+  MCP that expansion never runs. Passing `["jsoup"]` therefore scopes to files sitting
+  *directly at* the repo root: `CHANGES.md`, `change-archive.txt`, `README.md`, `LICENSE`,
+  `SECURITY.md`. Nothing under `src/`. It returns plausible-looking hits, so it fails
+  silently rather than erroring. `_expand_index_folders` in `modes.py` enumerates the
+  directories locally and passes all of them; `voitta_rag_index` / `voitta_rag_java_index`
+  configure it.
+
+  Scoping is still required -- left unset, search runs across every indexed folder on the
+  instance, which on a dogfooding instance includes this repository, so the RAG arm would be
+  retrieving over its own source.
 
 Check out the repo under test and point `config.json` at it:
 
@@ -94,8 +112,16 @@ python3 judge.py  --runs results/runs-<stamp>.jsonl
 python3 report.py --scored results/runs-<stamp>-scored.jsonl
 ```
 
-`runner.py --modes voitta-rag` re-runs a single mode. Both scripts append, so a
-failed mode can be re-run into the same file without discarding good records.
+`runner.py --modes cce` re-runs a single mode; `--caveman-output` applies the
+output-side overlay. `report.py --scored` takes several files, so arms run at
+different times report together. Both scripts append, so a failed mode can be
+re-run into the same file without discarding good records.
+
+**Quote mode names containing `>`.** The chain modes were originally called
+`llm-tldr->voitta-rag`; unquoted on a shell command line the `>` is a redirect,
+so `--modes llm-tldr->cce` silently ran a mode named `llm-tldr-` and truncated a
+file called `cce` in the working directory. They are now `llm-tldr-then-cce` and
+`llm-tldr-then-voitta-rag`.
 
 ## Method notes
 
@@ -121,157 +147,209 @@ for assembling the dump, never a token estimate.
 **Self-reference.** voitta-rag and llm-tldr are Python; the repo under test is
 Java. No tool is retrieving over its own source.
 
-## Second run — 2026-07-31 (voitta-rag arm + baseline q4 re-run)
+## Results — 2026-08-08
 
-`results/runs-20260731T222455Z-scored.jsonl`, combined with the first run's records for
-the two modes it covered. jsoup @ `d24b16d9`, same models and judge as below.
-`voitta_rag_include_folders` is set to `["jsoup"]` so retrieval cannot reach the other
-indexed corpora (which include this repository — without the scope, the RAG arm would be
-retrieving over its own source).
+jsoup @ `d24b16d9`, 97 `.java` files (tests and `target/` excluded). Answers on
+Claude Sonnet 5 at effort `high`; judge Claude Opus 5 at effort `high` with
+read-only repo tools resolving every citation. Five questions, one per class.
+Raw records in `results/`.
 
-| mode | n | score /12 | tokens in | tokens out | sec | $/question | verified cites | bogus cites |
+`+caveman-out` rows are the same tokens-in mode re-run with hq#88's output-side
+compression overlay; it is orthogonal to the mode, so it appears as its own row
+rather than being averaged in.
+
+| mode | n | score /12 | tokens in | tokens out | sec | $/q | verified | bogus |
 |---|---|---|---|---|---|---|---|---|
-| baseline | 5 | **6.60** | 225,986 | 7,090 | 67.4 | 0.5229 | 42 | 3 |
-| llm-tldr | 5 | **2.40** | 5,179 | 1,325 | 13.6 | 0.0236 | 2 | 29 |
-| voitta-rag | 5 | **3.00** | 4,255 | 1,384 | 14.7 | 0.0223 | 22 | 3 |
+| **cce** | 5 | **11.40** | 288,342 | 6,200 | 86.5 | 0.6387 | 142 | 2 |
+| llm-tldr-then-cce | 5 | 11.00 | 288,436 | 6,097 | 79.2 | 0.6378 | 124 | **0** |
+| baseline | 5 | 10.80 | 404,878 | 4,547 | 44.9 | 0.8552 | 65 | 11 |
+| baseline +caveman-out | 5 | 10.60 | 404,957 | 14,859 | 126.3 | 0.9585 | 97 | 2 |
+| repomix | 5 | 10.40 | 406,277 | 12,486 | 105.8 | 0.9374 | 69 | 17 |
+| caveman-compression | 5 | 10.40 | 363,613 | 5,048 | 53.7 | 0.7777 | 86 | 1 |
+| cce +caveman-out | 5 | 10.40 | 230,064 | 4,916 | 70.9 | 0.5093 | 129 | 2 |
+| llm-tldr-structural | 5 | 6.60 | 66,895 | 1,824 | 18.5 | 0.1520 | 83 | 1 |
+| voitta-rag | 5 | 5.20 | 4,337 | 2,024 | 20.5 | 0.0289 | 26 | 24 |
+| voitta-rag-java | 5 | 4.80 | 4,334 | 2,314 | 22.9 | 0.0318 | 30 | 29 |
+| voitta-rag-java +caveman-out | 5 | 4.60 | 4,413 | 2,483 | 27.1 | 0.0337 | 8 | 41 |
+| llm-tldr-then-voitta-rag | 5 | 4.20 | 9,305 | 2,552 | 26.0 | 0.0441 | 36 | 15 |
+| llm-tldr +caveman-out | 5 | 3.40 | 5,258 | 1,063 | 12.1 | 0.0212 | 1 | 33 |
+| llm-tldr | 5 | 2.40 | 5,179 | 1,325 | 13.6 | 0.0236 | 2 | 29 |
 
-Per question class (mean /12):
+Per question class (mean /12), tokens-in modes only:
 
-| class | baseline | llm-tldr | voitta-rag |
+| class | cce | baseline | repomix | caveman-compr | tldr-then-cce | tldr-struct | voitta-rag | voitta-rag-java | tldr-then-rag | llm-tldr |
+|---|---|---|---|---|---|---|---|---|---|---|
+| architecture | 12 | 11 | 12 | 10 | 11 | 7 | 7 | 7 | 6 | 2 |
+| change-planning | 11 | 7 | 9 | 10 | 10 | 9 | 9 | 6 | 7 | 3 |
+| edge-case-dependency | 11 | 11 | 11 | 11 | 11 | 7 | 3 | 5 | 3 | 1 |
+| implementation-lookup | 12 | 9.5 | 9 | 11 | 11 | 7 | 6 | 5 | 4 | 5 |
+| path-tracing | 11 | 8.5 | 11 | 10 | 12 | 3 | 1 | 1 | 1 | 1 |
+
+### The headline: don't fill the window, let the model go get it
+
+**Agentic exploration beats every packing strategy, and costs less than the full
+dump.** `cce` -- the model with `read_file` / `grep` / `glob` and no injected
+context -- scores **11.40/12 on 288K cumulative tokens at $0.64/question**, against
+the full dump's **10.80 on 405K at $0.86**. Better answers, 29% fewer tokens, 25%
+cheaper. It also produced **142 verified citations against 2 bogus**, the best
+citation record in the benchmark, because it read the lines it cited instead of
+being handed a summary of them.
+
+That is the finding the whole exercise exists to produce, and it inverts the
+premise the tools are sold on. Every tokens-in tool here is trying to answer "how
+do I fit the codebase into the window." On this question set the better move is
+not to fit it at all.
+
+The caveat that keeps this honest: `tokens_in` for an agentic mode is **cumulative
+across the tool loop**, not one request. It is the right number for cost, and it is
+not comparable to a one-shot mode's single-request figure without saying so.
+
+### llm-tldr: the first result was the adapter, not the tool
+
+The 2026-07-27 run reported llm-tldr at 2.40/12 with 29 fabricated citations, and
+flagged that it measured one adapter. That flag was worth keeping:
+
+| adapter | score | verified | bogus | tokens in | $/q |
+|---|---|---|---|---|---|
+| `semantic search --expand` | 2.40 | 2 | 29 | 5,179 | 0.0236 |
+| `semantic search` -> `extract` | **6.60** | **83** | **1** | 66,895 | 0.1520 |
+
+Swapping the subcommand nearly triples the score and takes bogus citations from 29
+to 1. The mechanism is exactly as predicted: `semantic search` reports `"line": 1`
+for every code unit, while `extract` carries real `line_number` fields. The tool
+was never the problem; the adapter was throwing away the line numbers before the
+model ever saw them.
+
+**`llm-tldr-structural` is also the best quality-per-token in the benchmark** --
+6.60 at 67K tokens and $0.15/question, roughly a sixth of baseline's cost for 61%
+of its score. If you are optimising cost-per-point rather than peak quality, it is
+the pick.
+
+(`tldr structure` was the other candidate adapter and is unusable here: no line
+numbers at all, and it parses 50 of the 97 files.)
+
+### Retrieval underperforms here, and the corpus was not the reason
+
+The previous writeup blamed voitta-rag's score on corpus asymmetry -- it indexed
+233 files including changelogs while the other arms saw 97 `.java` files. That
+hypothesis is now tested directly and **it was wrong**:
+
+| | score | verified | bogus |
 |---|---|---|---|
-| implementation-lookup | 9 | 5 | 3 |
-| path-tracing | 5 | 1 | 1 |
-| change-planning | 4 | 3 | 1 |
-| architecture | 4 | 2 | **6** |
-| edge-case-dependency | 11 | 1 | 4 |
+| `voitta-rag` (233 files, whole checkout) | 5.20 | 26 | 24 |
+| `voitta-rag-java` (97 files, exactly the benchmark corpus) | 4.80 | 30 | 29 |
 
-**voitta-rag scores low for a different reason than llm-tldr, and the citation column shows
-it.** llm-tldr fabricated locations (29 bogus / 2 verified). voitta-rag's citations are
-almost all real (22 verified / 3 bogus) — it scores low because it **retrieved the wrong
-documents and then correctly refused**. Four of five answers are refusals whose stated
-reason is that the source files were not in the retrieved context. The judge notes confirm
-the premise is false: the files are in the repo.
+Matching the corpus did not help; it scored marginally *lower*. Both arms carry
+roughly as many bogus citations as verified ones. The mechanism is visible in the
+chunk record: it has `chunk_index` but **no line numbers**, so a model given a
+correct chunk still cannot cite `file:line` and reconstructs one. This is the same
+failure as the first llm-tldr adapter, from the same cause, and it is the highest-
+value fix for this arm.
 
-Mechanism: the folder was indexed whole, and BM25+semantic retrieval on questions phrased
-in changelog vocabulary ("malformed start tags", "charset conflict") ranks `CHANGES.md` and
-`change-archive.txt` above the `.java` files, because jsoup's changelog literally describes
-these behaviours in prose. The Java source was indexed and reachable; it just lost the
-ranking. A refusal is the *safe* failure mode and is worth distinguishing from a confident
-wrong answer — but it is still a retrieval failure, and it is the mode's headline result.
+Chaining does not rescue it either: `llm-tldr-then-voitta-rag` scores 4.20, below
+both of its halves. Chaining onto the agentic loop is the one that works --
+`llm-tldr-then-cce` at 11.00 with **zero bogus citations across all five
+questions** -- though it does not beat plain `cce`, so the seed earns nothing here.
 
-The one class where voitta-rag wins outright is **architecture** (6 vs 4 baseline, 2 tldr),
-which is the class where prose-level chunks are the right context.
+### Repomix is the same dump with a nicer cover page
 
-### Corpus asymmetry — read the comparison with this caveat
+Pointed at the same include/exclude globs, Repomix emits **1,127,414 characters
+against the plain dump's 1,119,819** and scores 10.40 against 10.80. Its
+advertised ~70% token reduction is *file selection* -- honouring `.gitignore`,
+dropping binaries -- not compression of the files it keeps. Once your globs are
+already scoped, there is nothing left for it to select, and what remains is
+formatting. It is a good packer; it is not a compressor, and hq#88 listed it under
+a claim it does not make on this workload.
 
-The three arms do not see the same corpus. `baseline` and `llm-tldr` are scoped to
-`**/*.java` minus tests (97 files); voitta-rag indexed the whole checkout (233 files,
-7,819 chunks) including Markdown and changelogs. That asymmetry is *load-bearing* for the
-result above, so this is not yet a clean head-to-head. Two follow-ups, in order of value:
+### Two axes, and one measurement trap
 
-1. Re-run voitta-rag against a `.java`-only index and see how much of the gap is corpus
-   rather than retrieval.
-2. voitta-rag chunk records carry `chunk_index` but no line numbers, so the answering model
-   cannot cite `file:line` from a chunk even when the chunk is correct. Its 22 verified
-   citations came from reasoning about file paths, not from the retrieval payload. Adding
-   line spans to the chunk record is the highest-value change to this arm.
+hq#88's real contribution is separating tokens-in from tokens-out. Both halves
+produced a result.
 
-### Second harness bug found by this run
+**Input side.** `caveman-compression` (spaCy, rule-based) cut the dump 1,119,819 ->
+1,014,004 chars, **9.4%**, and cost 0.4 points (10.40 vs 10.80) -- roughly neutral,
+and better than expected given what it does to source: `Map. Entry < String String >`
+is what survives of `Map.Entry<String,String>`. It strips the punctuation that
+makes code parseable and the model reconstructs it anyway. Note the tool is built
+for prose; this is a test of a mismatch, not of the tool used as intended. The
+LLM-backed variant was deliberately not used -- a non-deterministic compressor
+inside a cell makes the cell unattributable.
 
-`baseline` is **not** a full repository dump, and the earlier "full-dump ceiling" reading of
-its 7.25 was wrong. `build_baseline` packs files alphabetically and *skips* any file that
-would exceed the remaining character budget while continuing down the list — so the packing
-is biased against large files. At `baseline_char_budget: 600000` it includes **69 of 97
-files**, and the ones it drops are the biggest: `Parser.java`, `Tokeniser.java`,
-`TokeniserState.java`, `TreeBuilder.java`, `HtmlTreeBuilder.java`, `HtmlTreeBuilderState.java`
-are all absent, while seven small `parser/` files are present.
+**Output side.** The overlay reliably shrinks the visible answer at little quality
+cost:
 
-That is why the re-run of `jsoup-q4/baseline` (the architecture question — "describe the
-tokeniser, the tree builder, and the parser state machine") scored 4/12: the answer states
-that those exact classes are "absent from the provided files", which is true of the dump it
-was given and false of the repository. The judge scored it against the repository and marked
-3 bogus citations.
+| mode | answer chars | with overlay | score | with overlay |
+|---|---|---|---|---|
+| baseline | 5,699 | 4,496 (-21%) | 10.80 | 10.60 |
+| cce | 6,389 | 4,029 (-37%) | 11.40 | 10.40 |
+| voitta-rag-java | 4,665 | 3,659 (-22%) | 4.80 | 4.60 |
+| llm-tldr | 2,387 | 1,862 (-22%) | 2.40 | 3.40 |
 
-So the baseline arm currently measures "as much of the repo as fits, largest files dropped
-first", not "the whole repo". Raise the budget above the ~1.1 MB the 97 files need, or change
-the packer to stop at the budget rather than skip-and-continue, before treating baseline as
-the quality ceiling.
+**But you cannot measure the output axis with `tokens_out` while adaptive thinking
+is on.** `tokens_out` bills thinking and visible text together, and thinking
+dominates and varies wildly: `baseline +caveman-out` shrank its visible answer 21%
+while its `tokens_out` went *up* 3x, from 4,547 to 14,859. Anyone benchmarking
+output-side compression against `tokens_out` on a thinking model will measure
+noise. Measure the rendered answer.
 
-## First run — 2026-07-27 (baseline + llm-tldr only)
+### Cost
 
-`results/runs-20260727T224039Z-scored.jsonl`. jsoup @ `d24b16d9`, answers on
-Claude Sonnet 5 (effort high), judge Claude Opus 5 (effort high) with repo tools.
+**$30.95 answering + $51.90 judging = $82.85 across 75 scored cells.**
 
-| mode | n | score /12 | tokens in | tokens out | sec | $/question |
-|---|---|---|---|---|---|---|
-| baseline | 4 | **7.25** | 225,986 | 7,128 | 67.0 | 0.5233 |
-| llm-tldr | 5 | **2.40** | 5,179 | 1,325 | 13.6 | 0.0236 |
+Judging costs more than answering. That is not overhead -- verification is a
+tool-using agent reading real source, and it is the only reason any of the
+citation findings above exist. hq#87 relayed a "<$20 for a controlled eval"
+target; a controlled eval of 14 mode-variants at this rigour is roughly 4x that.
+The cheap version of this benchmark is the one that reports token ratios and gets
+llm-tldr backwards.
 
-Per question class (mean /12):
+## Known limits
 
-| class | baseline | llm-tldr |
-|---|---|---|
-| implementation-lookup | 9 | 5 |
-| path-tracing | 5 | 1 |
-| change-planning | 4 | 3 |
-| architecture | (lost) | 2 |
-| edge-case-dependency | 11 | 1 |
+- **Five questions.** Enough to catch a large effect, not enough to rank close
+  results. Treat the 10.40-10.80 cluster (baseline / repomix / caveman-compression
+  / cce+caveman-out) as unresolved, not as an ordering. The gaps that are safe to
+  read are the large ones: cce over the compressed modes, and both llm-tldr
+  adapters against each other.
+- **One repo, and an unfamiliar one.** The familiar-repo arm in the plan, which is
+  where structural indexes should do best, is not measured.
+- **Single judge, single pass, no inter-rater check.**
+- **Agentic `tokens_in` is cumulative**; one-shot modes report a single request.
+- **`caveman-compression` is prose tooling on source code** by hq#88's design, not
+  the tool used as intended.
+- **hq#108 (graphify) is not covered.** It needs a relational / multi-hop /
+  map-the-subsystems question class first -- the current five have no cell where an
+  inferred graph should win.
 
-**The headline is the citation column, not the token column.** llm-tldr cut input
-tokens 44x and cost 22x, and produced **29 bogus citations against 2 verified**
-across five questions -- zero verified citations in three of them. Baseline
-produced **34 verified and 0 bogus**. A context strategy that saves 97% of the
-tokens and cites locations that do not exist has not saved anything; it has moved
-the cost from tokens to review. This is exactly what the benchmark existed to
-catch, and a token-savings-only comparison would have reported the opposite
-conclusion.
+## Harness bugs found by running this
 
-Mechanism: `tldr semantic search` returns `"line": 1` for every code unit, so the
-answering model had no real line numbers and invented them. See the fairness
-caveat below before generalising this to llm-tldr as a whole.
+Four, all of which produced plausible wrong numbers rather than errors. Kept here
+because the debugging is the reusable part.
 
-Absolute scores are low on both arms. Baseline at 7.25/12 is not a good result
-either -- the full-dump ceiling on this question set is unimpressive, which is
-itself worth knowing before treating baseline as the quality bar.
-
-### Harness bug found by this run (fixed; see also the second bug above)
-
-`jsoup-q4 / baseline` returned **no text at all** and could not be scored. With
-adaptive thinking on, `max_tokens` caps thinking **plus** response text; at
-`max_tokens: 16000` the model spent the entire budget inside thinking on a
-226K-token context and emitted zero text blocks -- billed in full, `stop_reason:
-max_tokens`, empty answer. `answer_max_tokens` is now **32000**. That cell was re-run
-on 2026-07-31 and the baseline column is complete in the second-run table above; the
-table immediately below still reports baseline at n=4 rather than silently averaging
-four cells as if they were five.
-
-Raising `answer_max_tokens` to 32000 then broke the runner a second way: the SDK refuses
-a non-streaming request it estimates may run longer than ten minutes (`ValueError:
-Streaming is required for operations that may take longer than 10 minutes`), so every
-cell failed identically on the next run. `answer_one` now uses
-`client.messages.stream(...)` + `stream.get_final_message()`, which reports the same
-`usage` fields.
-
-## Known limits of v0
-
-- **The llm-tldr arm measures one way of using the tool, not its ceiling.** The
-  adapter calls `tldr semantic search --expand` only. `tldr context`, `structure`,
-  `calls`, and `slice` may return real line numbers and would likely score very
-  differently on citation accuracy. Do not read the result above as "llm-tldr is
-  bad" -- read it as "this adapter, on this question set, produced uncitable
-  context." Trying a second adapter is a one-function change in `modes.py` and is
-  the highest-value next experiment.
-- **The voitta-rag arm likewise measures one way of using the tool.** Whole-folder index,
-  default `sparse_weight`, top-20 chunks, no line numbers in the chunk record. Each of
-  those is a knob, and the corpus asymmetry against the two `.java`-scoped arms is not yet
-  controlled for. See "Corpus asymmetry" above.
-- **`baseline` is a size-biased subset, not a full dump** -- 69 of 97 files at the current
-  budget, largest files dropped. It is not currently a quality ceiling. See "Second harness
-  bug" above.
-- One repo, and an unfamiliar one. It does not measure the "we already know this
-  codebase" case that the familiar-repo arm in the plan covers.
-- Five questions is enough to catch a large effect and not enough to rank close
-  results. Treat a small gap between modes as unresolved, not as a tie.
-- Single judge, single pass, no inter-rater check.
-- CCE and the two chain modes from hq#75 are not in v0, so v0 does **not** by
-  itself close hq#75.
+1. **`max_tokens` caps thinking plus text.** At 16000, a 226K-token context spent
+   the entire budget inside thinking and emitted zero text blocks -- billed in
+   full, `stop_reason: max_tokens`, empty answer. Raised to 32000; the 406K-token
+   repomix cells then hit the same wall, so it is now 64000. Symptom is an empty
+   `raw_output` with a full bill.
+2. **The SDK refuses long non-streaming requests.** Raising `max_tokens` tripped
+   `ValueError: Streaming is required for operations that may take longer than 10
+   minutes`, failing every cell identically. `answer_one` streams and takes
+   `usage` off `get_final_message()`.
+3. **`baseline` was a size-biased subset, not a full dump.** The packer skipped
+   any file that overflowed the budget and continued down the list -- a size filter
+   wearing a budget's clothing. It admitted 69 of 97 files and dropped the largest:
+   `Parser.java`, `Tokeniser.java`, `TreeBuilder.java`, `HtmlTreeBuilder.java`.
+   The architecture question asks about exactly those classes, and the answer
+   truthfully reported them "absent from the provided files". Fixing it moved
+   baseline **6.60 -> 10.80**, so every cross-mode comparison in the first writeup
+   was anchored to a control that was wrong by 4.2 points. It now stops at the
+   budget and says so in the header.
+4. **`include_folders` is not subtree scoping.** Over MCP it is an *exact* match on
+   a chunk's parent directory. Passing `["jsoup"]` scoped retrieval to the five
+   files at the repo root -- `CHANGES.md`, `change-archive.txt`, `README.md` -- and
+   excluded all of `src/`. Retrieval returned real, well-formed hits; the model
+   correctly said the source was not there; and the 2026-07-31 writeup recorded
+   "retrieval ranks changelogs above source" as a finding about RAG. It was a
+   finding about the filter. `_expand_index_folders` now enumerates directories
+   locally. **Silent scope failures do not error, they produce publishable
+   conclusions** -- print what an arm actually retrieved before theorising about
+   why it lost.
