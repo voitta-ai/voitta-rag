@@ -3,7 +3,8 @@
 
 Reads hook input JSON from stdin, then reads the transcript JSONL file pointed
 to by transcript_path. Extracts user prompts and assistant text responses,
-formats them as markdown, and POSTs to voitta-rag's create_memory MCP tool.
+formats them as markdown, redacts credential-shaped substrings, and POSTs to
+voitta-rag's create_memory MCP tool.
 
 Configured via env vars (set by setup.sh):
     VOITTA_URL   voitta-rag base URL (default: http://localhost:8000)
@@ -15,6 +16,7 @@ break the user's session close on a memory save error.
 
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -95,6 +97,57 @@ def _flatten_assistant_content(content) -> str:
                 parts.append(part.get("text", ""))
         return "\n".join(p for p in parts if p).strip()
     return ""
+
+
+REDACTED = "[REDACTED-SECRET]"
+
+# Credential shapes to strip before a transcript is persisted and embedded.
+# A memory store is long-lived and retrievable, so anything that lands here can
+# resurface in a later session's context long after the original secret was
+# rotated -- or, worse, before.
+#
+# Ordered so that longer prefixes match first: github_pat_ must be tried before
+# the shorter gh?_ forms, or it gets half-eaten.
+_SECRET_PATTERNS = [
+    re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"glpat-[A-Za-z0-9\-_]{20,}"),
+    # Slack: xox?- are bot/user/app tokens, xapp- is an app-level token,
+    # which is a different shape and is easy to miss.
+    re.compile(r"xox[baprse]-[A-Za-z0-9\-]{10,}"),
+    re.compile(r"xapp-[0-9]-[A-Za-z0-9\-]{10,}"),
+    re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    re.compile(
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+        re.DOTALL,
+    ),
+    # URLs of the form scheme://user:secret@host, which is how a PAT ends up in
+    # a git remote and therefore in any transcript that echoed one.
+    re.compile(r"(?<=://)([^/\s:@]+):([^/\s@]+)(?=@)"),
+]
+
+# Assignment-shaped secrets: redact only the value, keep the name so the
+# surrounding text still reads.
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)\b(api[_-]?key|secret|password|passwd|token)\b(\s*[=:]\s*[\"']?)"
+    r"([A-Za-z0-9/+=_\-]{16,})",
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Replace credential-shaped substrings with a marker.
+
+    Deliberately conservative about what it keeps: a false positive costs a
+    little readability in a stored memory, a false negative persists a live
+    credential in an embedded, searchable store.
+    """
+    for pattern in _SECRET_PATTERNS[:-1]:
+        text = pattern.sub(REDACTED, text)
+    text = _SECRET_PATTERNS[-1].sub(r"\1:" + REDACTED, text)
+    text = _SECRET_ASSIGNMENT.sub(r"\1\2" + REDACTED, text)
+    retval = text
+    return retval
 
 
 def format_memory(session_id: str, cwd: str, reason: str, turns: list[dict]) -> str:
@@ -200,7 +253,7 @@ def main() -> int:
         print("voitta-rag session-memory: no user/assistant turns — skipping", file=sys.stderr)
         return 0
 
-    content = format_memory(session_id, cwd, reason, turns)
+    content = redact_secrets(format_memory(session_id, cwd, reason, turns))
 
     voitta_url = os.environ.get("VOITTA_URL", "http://localhost:8000")
     voitta_user = os.environ.get("VOITTA_USER", os.environ.get("USER", "anonymous"))
