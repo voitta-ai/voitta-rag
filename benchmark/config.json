@@ -1,0 +1,68 @@
+{
+  "repo": {
+    "id": "jsoup",
+    "path": "/Users/gregory/g/git/jsoup",
+    "include_globs": [
+      "**/*.java"
+    ],
+    "exclude_globs": [
+      "**/test/**",
+      "**/target/**"
+    ]
+  },
+  "answer_model": "claude-sonnet-5",
+  "answer_effort": "high",
+  "answer_max_tokens": 64000,
+  "judge_model": "claude-opus-5",
+  "judge_effort": "high",
+  "judge_max_tokens": 16000,
+  "judge_max_iterations": 40,
+  "modes": [
+    "baseline",
+    "llm-tldr",
+    "llm-tldr-structural",
+    "voitta-rag",
+    "voitta-rag-java",
+    "repomix",
+    "caveman-compression",
+    "cce",
+    "llm-tldr-then-voitta-rag",
+    "llm-tldr-then-cce"
+  ],
+  "baseline_char_budget": 2000000,
+  "tldr_bin": "/Users/gregory/g/git.voitta/voitta-rag/.venv/bin/tldr",
+  "voitta_rag_mcp_url": "http://localhost:58000/mcp/mcp",
+  "voitta_rag_search_limit": 20,
+  "voitta_rag_index": {
+    "name": "jsoup",
+    "local_dir": "/Users/gregory/g/git/jsoup",
+    "include_globs": ["**/*"],
+    "exclude_globs": ["**/.git/**"]
+  },
+  "pricing_usd_per_mtok": {
+    "claude-sonnet-5": {
+      "input": 2.0,
+      "output": 10.0
+    },
+    "claude-opus-5": {
+      "input": 5.0,
+      "output": 25.0
+    }
+  },
+  "output_dir": "results",
+  "tldr_search_k": 15,
+  "tldr_lang": "java",
+  "tldr_structural_max_files": 8,
+  "voitta_rag_java_index": {
+    "name": "jsoup-javaonly",
+    "local_dir": "/Users/gregory/g/git/jsoup-javaonly",
+    "include_globs": ["**/*.java"],
+    "exclude_globs": []
+  },
+  "repomix_bin": "npx",
+  "repomix_style": "plain",
+  "repomix_tmp_dir": "/tmp",
+  "caveman_compression_dir": "/Users/gregory/g/git.voitta/caveman-compression",
+  "caveman_python": "/Users/gregory/g/git.voitta/voitta-rag/.venv/bin/python3",
+  "cce_max_iterations": 40
+}
