@@ -1,0 +1,92 @@
+name: release
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+    # Docs-only changes don't ship to users and owe no version bump.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tests/**'
+
+permissions:
+  contents: read
+
+env:
+  VERSION_FILE: pyproject.toml
+  PLUGIN_FILE: .claude-plugin/plugin.json
+  FIRST_RELEASE_SUMMARY: |
+    Self-hosted RAG knowledge base over MCP: indexes documents and code
+    repos, and provides semantic search to Claude Code / MCP clients.
+
+jobs:
+  version-bumped:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version must advance, and plugin.json must match
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE"
+          old=$(git show "FETCH_HEAD:$VERSION_FILE" | grep -m1 '^version' | sed -E 's/version *= *"([^"]+)"/\1/')
+          new=$(grep -m1 '^version' "$VERSION_FILE" | sed -E 's/version *= *"([^"]+)"/\1/')
+          if [ "$old" = "$new" ]; then
+            echo "::error::$VERSION_FILE version is still $old - bump it."
+            exit 1
+          fi
+          if [ "$(printf '%s\n%s\n' "$old" "$new" | sort -V | head -1)" != "$old" ]; then
+            echo "::error::$new does not advance past $old."
+            exit 1
+          fi
+          echo "$old -> $new"
+
+          plugin=$(jq -r .version "$PLUGIN_FILE")
+          if [ "$plugin" != "$new" ]; then
+            echo "::error::$PLUGIN_FILE is $plugin, expected $new - bump both files in lockstep."
+            exit 1
+          fi
+
+  tag-and-release:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag and release if the version is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(grep -m1 '^version' "$VERSION_FILE" | sed -E 's/version *= *"([^"]+)"/\1/')
+          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "v$version is already tagged; nothing to release."
+            exit 0
+          fi
+
+          prev_tag=$(git tag -l 'v*' | sort -V | tail -1)
+          if [ -z "$prev_tag" ]; then
+            # First release ever: --generate-notes would dump the entire
+            # history. Use a short summary plus PRs merged in the last 30
+            # days instead.
+            since=$(date -u -d '30 days ago' +%Y-%m-%d)
+            prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged \
+              --search "merged:>=$since" --json number,title,url \
+              --jq '.[] | "- #\(.number) " + .title')
+            notes=$(printf '%s\n\n## Merged in the last 30 days\n%s\n' \
+              "$FIRST_RELEASE_SUMMARY" "${prs:-(none)}")
+            gh release create "v$version" \
+              --title "v$version" \
+              --notes "$notes" \
+              --target "$GITHUB_SHA"
+          else
+            gh release create "v$version" \
+              --title "v$version" \
+              --generate-notes \
+              --target "$GITHUB_SHA"
+          fi
