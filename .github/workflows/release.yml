@@ -1,0 +1,120 @@
+name: release
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+    # Docs-only changes don't ship to users and owe no version bump.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'tests/**'
+
+permissions:
+  contents: read
+
+env:
+  VERSION_FILE: pyproject.toml
+  PLUGIN_FILE: .claude-plugin/plugin.json
+  FIRST_RELEASE_SUMMARY: |
+    Self-hosted RAG knowledge base over MCP: indexes documents and code
+    repos, and provides semantic search to Claude Code / MCP clients.
+
+jobs:
+  version-bumped:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version must advance, and plugin.json must match
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE"
+
+          if git cat-file -e "FETCH_HEAD:$VERSION_FILE" 2>/dev/null; then
+            old=$(git show "FETCH_HEAD:$VERSION_FILE" | grep -m1 '^version' | sed -E 's/version *= *"([^"]+)"/\1/')
+          else
+            echo "$VERSION_FILE does not exist on $BASE; treating as introduced by this PR."
+            old=""
+          fi
+          new=$(grep -m1 '^version' "$VERSION_FILE" | sed -E 's/version *= *"([^"]+)"/\1/')
+
+          if [ -z "$old" ]; then
+            echo "$VERSION_FILE newly added at $new"
+          elif [ "$old" = "$new" ]; then
+            echo "::error::$VERSION_FILE version is still $old - bump it."
+            exit 1
+          elif [ "$(printf '%s\n%s\n' "$old" "$new" | sort -V | head -1)" != "$old" ]; then
+            echo "::error::$new does not advance past $old."
+            exit 1
+          else
+            echo "$old -> $new"
+          fi
+
+          plugin=$(jq -r .version "$PLUGIN_FILE")
+          if [ "$plugin" != "$new" ]; then
+            echo "::error::$PLUGIN_FILE is $plugin, expected $new - bump both files in lockstep."
+            exit 1
+          fi
+
+  tag-and-release:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag and release if the version is new
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^version' "$VERSION_FILE" | sed -E 's/version *= *"([^"]+)"/\1/')
+          tag="v$version"
+
+          target_args=()
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tag_sha=$(git rev-parse "refs/tags/$tag^{commit}")
+            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+              # This push didn't bump the version - completely normal (not
+              # every push ships a new version). Don't fail; just make sure
+              # the existing tag has a release.
+              echo "::notice::$tag already exists at $tag_sha; this push ($GITHUB_SHA) did not bump the version."
+            fi
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "$tag is already tagged and released; nothing to do."
+              exit 0
+            fi
+            echo "$tag exists (at $tag_sha) but has no release yet; creating it."
+          else
+            echo "$tag does not exist yet; creating it on $GITHUB_SHA."
+            target_args=(--target "$GITHUB_SHA")
+          fi
+
+          prev_tag=$(git tag -l 'v*' | grep -vx "$tag" | sort -V | tail -1 || true)
+          if [ -z "$prev_tag" ]; then
+            # First release ever: --generate-notes would dump the entire
+            # history. Use a short summary plus PRs merged in the last 30
+            # days instead.
+            since=$(date -u -d '30 days ago' +%Y-%m-%d)
+            prs=$(gh pr list --repo "$GITHUB_REPOSITORY" --state merged \
+              --search "merged:>=$since" --json number,title,url \
+              --jq '.[] | "- #\(.number) " + .title')
+            notes=$(printf '%s\n\n## Merged in the last 30 days\n%s\n' \
+              "$FIRST_RELEASE_SUMMARY" "${prs:-(none)}")
+            gh release create "$tag" \
+              --title "$tag" \
+              --notes "$notes" \
+              "${target_args[@]}"
+          else
+            gh release create "$tag" \
+              --title "$tag" \
+              --generate-notes \
+              "${target_args[@]}"
+          fi
