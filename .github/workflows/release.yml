@@ -65,6 +65,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -77,17 +78,23 @@ jobs:
           version=$(grep -m1 '^version' "$VERSION_FILE" | sed -E 's/version *= *"([^"]+)"/\1/')
           tag="v$version"
 
+          target_args=()
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             tag_sha=$(git rev-parse "refs/tags/$tag^{commit}")
             if [ "$tag_sha" != "$GITHUB_SHA" ]; then
-              echo "::error::$tag already exists at $tag_sha, but this push is $GITHUB_SHA - two merges landed with the same version. Bump the version again rather than retagging."
-              exit 1
+              # This push didn't bump the version - completely normal (not
+              # every push ships a new version). Don't fail; just make sure
+              # the existing tag has a release.
+              echo "::notice::$tag already exists at $tag_sha; this push ($GITHUB_SHA) did not bump the version."
             fi
             if gh release view "$tag" >/dev/null 2>&1; then
               echo "$tag is already tagged and released; nothing to do."
               exit 0
             fi
-            echo "$tag exists on this commit but has no release yet; creating the release."
+            echo "$tag exists (at $tag_sha) but has no release yet; creating it."
+          else
+            echo "$tag does not exist yet; creating it on $GITHUB_SHA."
+            target_args=(--target "$GITHUB_SHA")
           fi
 
           prev_tag=$(git tag -l 'v*' | grep -vx "$tag" | sort -V | tail -1 || true)
@@ -104,10 +111,10 @@ jobs:
             gh release create "$tag" \
               --title "$tag" \
               --notes "$notes" \
-              --target "$GITHUB_SHA"
+              "${target_args[@]}"
           else
             gh release create "$tag" \
               --title "$tag" \
               --generate-notes \
-              --target "$GITHUB_SHA"
+              "${target_args[@]}"
           fi
