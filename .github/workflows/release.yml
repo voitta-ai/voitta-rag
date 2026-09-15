@@ -31,18 +31,28 @@ jobs:
         env:
           BASE: ${{ github.base_ref }}
         run: |
+          set -euo pipefail
           git fetch --no-tags --depth=1 origin "$BASE"
-          old=$(git show "FETCH_HEAD:$VERSION_FILE" | grep -m1 '^version' | sed -E 's/version *= *"([^"]+)"/\1/')
+
+          if git cat-file -e "FETCH_HEAD:$VERSION_FILE" 2>/dev/null; then
+            old=$(git show "FETCH_HEAD:$VERSION_FILE" | grep -m1 '^version' | sed -E 's/version *= *"([^"]+)"/\1/')
+          else
+            echo "$VERSION_FILE does not exist on $BASE; treating as introduced by this PR."
+            old=""
+          fi
           new=$(grep -m1 '^version' "$VERSION_FILE" | sed -E 's/version *= *"([^"]+)"/\1/')
-          if [ "$old" = "$new" ]; then
+
+          if [ -z "$old" ]; then
+            echo "$VERSION_FILE newly added at $new"
+          elif [ "$old" = "$new" ]; then
             echo "::error::$VERSION_FILE version is still $old - bump it."
             exit 1
-          fi
-          if [ "$(printf '%s\n%s\n' "$old" "$new" | sort -V | head -1)" != "$old" ]; then
+          elif [ "$(printf '%s\n%s\n' "$old" "$new" | sort -V | head -1)" != "$old" ]; then
             echo "::error::$new does not advance past $old."
             exit 1
+          else
+            echo "$old -> $new"
           fi
-          echo "$old -> $new"
 
           plugin=$(jq -r .version "$PLUGIN_FILE")
           if [ "$plugin" != "$new" ]; then
@@ -63,13 +73,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           version=$(grep -m1 '^version' "$VERSION_FILE" | sed -E 's/version *= *"([^"]+)"/\1/')
-          if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
-            echo "v$version is already tagged; nothing to release."
-            exit 0
+          tag="v$version"
+
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            tag_sha=$(git rev-parse "refs/tags/$tag^{commit}")
+            if [ "$tag_sha" != "$GITHUB_SHA" ]; then
+              echo "::error::$tag already exists at $tag_sha, but this push is $GITHUB_SHA - two merges landed with the same version. Bump the version again rather than retagging."
+              exit 1
+            fi
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "$tag is already tagged and released; nothing to do."
+              exit 0
+            fi
+            echo "$tag exists on this commit but has no release yet; creating the release."
           fi
 
-          prev_tag=$(git tag -l 'v*' | sort -V | tail -1)
+          prev_tag=$(git tag -l 'v*' | grep -vx "$tag" | sort -V | tail -1 || true)
           if [ -z "$prev_tag" ]; then
             # First release ever: --generate-notes would dump the entire
             # history. Use a short summary plus PRs merged in the last 30
@@ -80,13 +101,13 @@ jobs:
               --jq '.[] | "- #\(.number) " + .title')
             notes=$(printf '%s\n\n## Merged in the last 30 days\n%s\n' \
               "$FIRST_RELEASE_SUMMARY" "${prs:-(none)}")
-            gh release create "v$version" \
-              --title "v$version" \
+            gh release create "$tag" \
+              --title "$tag" \
               --notes "$notes" \
               --target "$GITHUB_SHA"
           else
-            gh release create "v$version" \
-              --title "v$version" \
+            gh release create "$tag" \
+              --title "$tag" \
               --generate-notes \
               --target "$GITHUB_SHA"
           fi
