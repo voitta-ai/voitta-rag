@@ -30,6 +30,7 @@
     "llm-tldr-then-cce"
   ],
   "baseline_char_budget": 2000000,
+  "baseline_require_full": true,
   "tldr_bin": ".venv/bin/tldr",
   "voitta_rag_mcp_url": "http://localhost:58000/mcp/mcp",
   "voitta_rag_search_limit": 20,

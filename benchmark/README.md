@@ -101,6 +101,7 @@ example:
 
 ```sh
 git clone https://github.com/jhy/jsoup ~/g/git/jsoup
+git -C ~/g/git/jsoup checkout d24b16d9   # the tree the results below came from
 cp config.example.json config.local.json
 ```
 
