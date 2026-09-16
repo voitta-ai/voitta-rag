@@ -4,7 +4,7 @@ The prompt template is identical across modes. Only the injected context differs
 so any measured difference is attributable to the context strategy under test.
 
 Usage:
-    python3 runner.py --config config.json --questions questions.jsonl
+    python3 runner.py --config config.local.json --questions questions.jsonl
     python3 runner.py --modes voitta-rag --questions questions.jsonl
 """
 
@@ -66,8 +66,7 @@ every `file:line` citation, symbol name, and factual claim must survive intact.
 
 
 def load_config(path):
-    with open(path) as handle:
-        retval = json.load(handle)
+    retval = judge_tools.load_config(path)
     return retval
 
 
@@ -256,7 +255,7 @@ def answer_one(client, config, repo_root, question, mode, caveman_output=False):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="config.json")
+    parser.add_argument("--config", default="config.local.json")
     parser.add_argument("--questions", default="questions.jsonl")
     parser.add_argument("--modes", nargs="*", default=None)
     parser.add_argument("--out", default=None)
@@ -269,7 +268,7 @@ def main():
         "--caveman-output",
         action="store_true",
         help=(
-            "apply the hq#88 output-side compression overlay; orthogonal to the "
+            "apply the output-side compression overlay; orthogonal to the "
             "mode, so any tokens-in mode can be run in both output styles"
         ),
     )

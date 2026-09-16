@@ -5,12 +5,10 @@ the model's window, at what token cost, without damaging answer quality.
 
 Methodology lives in [voitta-ai/voitta-rag#43](https://github.com/voitta-ai/voitta-rag/issues/43)
 (first comment) and the plan doc it came from. This directory is the executable
-half. The tracking issues are
-[hq#75](https://github.com/method-and-apparatus/hq/issues/75),
-[#87](https://github.com/method-and-apparatus/hq/issues/87),
-[#88](https://github.com/method-and-apparatus/hq/issues/88),
-[#108](https://github.com/method-and-apparatus/hq/issues/108), and
-[voitta-rag#49](https://github.com/voitta-ai/voitta-rag/issues/49).
+half; it is tracked in
+[voitta-rag#49](https://github.com/voitta-ai/voitta-rag/issues/49). The mode list
+also draws on an internal (non-public) survey of context-compression tools, referred
+to below as "the survey".
 
 ## Why it started small
 
@@ -22,7 +20,7 @@ since been added as configuration plus one builder:
 
 | Axis | now | How to expand further |
 |---|---|---|
-| Repos | jsoup (unfamiliar) | second `config.json`, or parameterise `repo` |
+| Repos | jsoup (unfamiliar) | second config file, or parameterise `repo` |
 | Questions | 5, one per class | append to `questions.jsonl` |
 | Modes | 10 (see `BUILDERS` / `AGENTIC_MODES`) | add a builder + an entry |
 | Chains | tldr -> rag, tldr -> cce | a builder that calls two others in sequence |
@@ -37,7 +35,7 @@ interaction shape, so `runner.py` dispatches it separately.
 
 | File | Role |
 |---|---|
-| `config.json` | repo, models, effort, pricing, mode list, per-mode settings |
+| `config.example.json` | repo, models, effort, pricing, mode list, per-mode settings; copy to `config.local.json` |
 | `questions.jsonl` | the locked question set (one per question class) |
 | `modes.py` | one context builder per mode; the only mode-aware code |
 | `runner.py` | runs every (question, mode) pair, writes one JSONL record each |
@@ -98,16 +96,25 @@ Per-mode prerequisites:
   instance, which on a dogfooding instance includes this repository, so the RAG arm would be
   retrieving over its own source.
 
-Check out the repo under test and point `config.json` at it:
+Check out the repo under test and create your local config from the committed
+example:
 
 ```sh
 git clone https://github.com/jhy/jsoup ~/g/git/jsoup
+cp config.example.json config.local.json
 ```
+
+`config.local.json` is gitignored and is what `runner.py` and `judge.py` read by
+default. Paths in it may start with `~` or be relative to `benchmark/` (run the
+scripts from this directory); both are expanded on load. The example assumes jsoup
+at `~/g/git/jsoup`, caveman-compression at `~/g/git.voitta/caveman-compression`,
+and `tldr` / `python3` from the `.venv` created above. Edit those to match your machine;
+a bare command name such as `tldr` is resolved through `PATH`.
 
 ## Run
 
 ```sh
-python3 runner.py --config config.json --questions questions.jsonl
+python3 runner.py --config config.local.json --questions questions.jsonl
 python3 judge.py  --runs results/runs-<stamp>.jsonl
 python3 report.py --scored results/runs-<stamp>-scored.jsonl
 ```
@@ -154,7 +161,7 @@ Claude Sonnet 5 at effort `high`; judge Claude Opus 5 at effort `high` with
 read-only repo tools resolving every citation. Five questions, one per class.
 Raw records in `results/`.
 
-`+caveman-out` rows are the same tokens-in mode re-run with hq#88's output-side
+`+caveman-out` rows are the same tokens-in mode re-run with the survey's output-side
 compression overlay; it is orthogonal to the mode, so it appears as its own row
 rather than being averaged in.
 
@@ -258,12 +265,12 @@ against the plain dump's 1,119,819** and scores 10.40 against 10.80. Its
 advertised ~70% token reduction is *file selection* -- honouring `.gitignore`,
 dropping binaries -- not compression of the files it keeps. Once your globs are
 already scoped, there is nothing left for it to select, and what remains is
-formatting. It is a good packer; it is not a compressor, and hq#88 listed it under
+formatting. It is a good packer; it is not a compressor, and the survey listed it under
 a claim it does not make on this workload.
 
 ### Two axes, and one measurement trap
 
-hq#88's real contribution is separating tokens-in from tokens-out. Both halves
+The survey's real contribution is separating tokens-in from tokens-out. Both halves
 produced a result.
 
 **Input side.** `caveman-compression` (spaCy, rule-based) cut the dump 1,119,819 ->
@@ -298,7 +305,7 @@ noise. Measure the rendered answer.
 
 Judging costs more than answering. That is not overhead -- verification is a
 tool-using agent reading real source, and it is the only reason any of the
-citation findings above exist. hq#87 relayed a "<$20 for a controlled eval"
+citation findings above exist. An internal planning thread set a "<$20 for a controlled eval"
 target; a controlled eval of 14 mode-variants at this rigour is roughly 4x that.
 The cheap version of this benchmark is the one that reports token ratios and gets
 llm-tldr backwards.
@@ -314,9 +321,9 @@ llm-tldr backwards.
   where structural indexes should do best, is not measured.
 - **Single judge, single pass, no inter-rater check.**
 - **Agentic `tokens_in` is cumulative**; one-shot modes report a single request.
-- **`caveman-compression` is prose tooling on source code** by hq#88's design, not
+- **`caveman-compression` is prose tooling on source code** by the survey's design, not
   the tool used as intended.
-- **hq#108 (graphify) is not covered.** It needs a relational / multi-hop /
+- **graphify is not covered.** It needs a relational / multi-hop /
   map-the-subsystems question class first -- the current five have no cell where an
   inferred graph should win.
 

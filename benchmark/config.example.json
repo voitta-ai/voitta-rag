@@ -1,7 +1,7 @@
 {
   "repo": {
     "id": "jsoup",
-    "path": "/Users/gregory/g/git/jsoup",
+    "path": "~/g/git/jsoup",
     "include_globs": [
       "**/*.java"
     ],
@@ -30,12 +30,12 @@
     "llm-tldr-then-cce"
   ],
   "baseline_char_budget": 2000000,
-  "tldr_bin": "/Users/gregory/g/git.voitta/voitta-rag/.venv/bin/tldr",
+  "tldr_bin": ".venv/bin/tldr",
   "voitta_rag_mcp_url": "http://localhost:58000/mcp/mcp",
   "voitta_rag_search_limit": 20,
   "voitta_rag_index": {
     "name": "jsoup",
-    "local_dir": "/Users/gregory/g/git/jsoup",
+    "local_dir": "~/g/git/jsoup",
     "include_globs": ["**/*"],
     "exclude_globs": ["**/.git/**"]
   },
@@ -55,14 +55,14 @@
   "tldr_structural_max_files": 8,
   "voitta_rag_java_index": {
     "name": "jsoup-javaonly",
-    "local_dir": "/Users/gregory/g/git/jsoup-javaonly",
+    "local_dir": "~/g/git/jsoup-javaonly",
     "include_globs": ["**/*.java"],
     "exclude_globs": []
   },
   "repomix_bin": "npx",
   "repomix_style": "plain",
   "repomix_tmp_dir": "/tmp",
-  "caveman_compression_dir": "/Users/gregory/g/git.voitta/caveman-compression",
-  "caveman_python": "/Users/gregory/g/git.voitta/voitta-rag/.venv/bin/python3",
+  "caveman_compression_dir": "~/g/git.voitta/caveman-compression",
+  "caveman_python": ".venv/bin/python3",
   "cce_max_iterations": 40
 }

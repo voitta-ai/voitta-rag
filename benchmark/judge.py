@@ -265,16 +265,42 @@ def judge_one(client, config, repo_root, record):
         messages.append({"role": "user", "content": results})
 
 
+def _expand_path(value):
+    """Expand "~" and anchor explicit relative paths at the working directory.
+
+    config.example.json writes paths with "~" or relative to benchmark/, and
+    subprocess never expands either. A bare command name ("python3") is left
+    alone so it still resolves through PATH.
+    """
+    retval = os.path.expanduser(value)
+    if os.sep in retval:
+        retval = os.path.abspath(retval)
+    return retval
+
+
+def load_config(path):
+    with open(path) as handle:
+        config = json.load(handle)
+    config["repo"]["path"] = _expand_path(config["repo"]["path"])
+    for key in ("tldr_bin", "caveman_compression_dir", "caveman_python"):
+        if key in config:
+            config[key] = _expand_path(config[key])
+    for key in ("voitta_rag_index", "voitta_rag_java_index"):
+        if key in config:
+            config[key]["local_dir"] = _expand_path(config[key]["local_dir"])
+    retval = config
+    return retval
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="config.json")
+    parser.add_argument("--config", default="config.local.json")
     parser.add_argument("--questions", default="questions.jsonl")
     parser.add_argument("--runs", required=True)
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
-    with open(args.config) as handle:
-        config = json.load(handle)
+    config = load_config(args.config)
 
     question_text = {}
     with open(args.questions) as handle:

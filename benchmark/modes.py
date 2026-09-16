@@ -67,6 +67,9 @@ def build_baseline(config, repo_root, question):
         used += len(block)
         included += 1
 
+    assert included == len(paths), f"{included} of {len(paths)}"
+    assert any(p.endswith("/Parser.java") for p in paths)
+
     if included == len(paths):
         header = (
             "Repository source dump. All {0} matching files included.\n\n".format(
