@@ -5,8 +5,12 @@ together. A mode is keyed by (mode, output_style), because hq#88's output-side
 compression is orthogonal to the tokens-in mode and has to be visible as its own
 row rather than averaged into one.
 
+Each --scored argument may end in "#mode,mode" to take only those modes (as
+printed in the table, e.g. "baseline +caveman-out") from that file, so a
+superseded arm in an older file does not double-count.
+
 Usage:
-    python3 report.py --scored results/a-scored.jsonl results/b-scored.jsonl
+    python3 report.py --scored results/a-scored.jsonl "results/b-scored.jsonl#llm-tldr"
 """
 
 import argparse
@@ -14,14 +18,19 @@ import json
 from collections import defaultdict
 
 
-def load(paths):
+def load(specs):
     records = []
-    for path in paths:
+    for spec in specs:
+        path, _, selector = spec.partition("#")
+        wanted = {m.strip() for m in selector.split(",")} if selector else None
         with open(path) as handle:
             for line in handle:
                 line = line.strip()
-                if line:
-                    records.append(json.loads(line))
+                if not line:
+                    continue
+                record = json.loads(line)
+                if wanted is None or mode_key(record) in wanted:
+                    records.append(record)
     return records
 
 
@@ -60,6 +69,37 @@ def main():
             "{0} record(s) errored or unscored; re-run them, or pass "
             "--allow-incomplete to report anyway.".format(dropped)
         )
+
+    # One scored cell per (mode, question). A duplicate means two runs of the
+    # same arm were passed together; averaging them silently changes the row.
+    duplicates = []
+    for mode, rows in by_mode.items():
+        seen = defaultdict(int)
+        for row in rows:
+            seen[row["question_id"]] += 1
+        duplicates += [
+            "{0} / {1} x{2}".format(mode, q, n) for q, n in seen.items() if n > 1
+        ]
+    if duplicates:
+        raise SystemExit(
+            "duplicate scored cells (select one file per mode with "
+            "'path#mode'): " + "; ".join(sorted(duplicates))
+        )
+
+    if not args.allow_incomplete:
+        expected = {r["question_id"] for rows in by_mode.values() for r in rows}
+        short = [
+            "{0} missing {1}".format(
+                mode, ",".join(sorted(expected - {r["question_id"] for r in rows}))
+            )
+            for mode, rows in by_mode.items()
+            if {r["question_id"] for r in rows} != expected
+        ]
+        if short:
+            raise SystemExit(
+                "incomplete matrix: " + "; ".join(sorted(short))
+                + " (pass --allow-incomplete to report anyway)"
+            )
 
     def mean(rows, fn):
         values = [fn(r) for r in rows if fn(r) is not None]

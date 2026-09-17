@@ -120,9 +120,10 @@ python3 judge.py  --runs results/runs-<stamp>.jsonl
 python3 report.py --scored results/runs-<stamp>-scored.jsonl
 ```
 
-`report.py` exits with an error if any record errored or went unscored, since
-means over the surviving cells would be biased; `--allow-incomplete` overrides it
-(needed for `results/runs-20260727T224039Z-scored.jsonl`, which has one such record).
+`report.py` exits with an error if any record errored or went unscored, if a
+(mode, question) cell appears twice, or if a mode is missing questions the others
+have; `--allow-incomplete` overrides the first and last. Append `#mode,mode` to a
+`--scored` path to take only those modes from it.
 
 `runner.py --modes cce` re-runs a single mode; `--caveman-output` applies the
 output-side overlay. `report.py --scored` takes several files, so arms run at
@@ -164,7 +165,20 @@ Java. No tool is retrieving over its own source.
 jsoup @ `d24b16d9`, 97 `.java` files (tests and `target/` excluded). Answers on
 Claude Sonnet 5 at effort `high`; judge Claude Opus 5 at effort `high` with
 read-only repo tools resolving every citation. Five questions, one per class.
-Raw records in `results/`.
+Raw records in `results/`. Both tables and the cost line are reproduced by:
+
+```sh
+python3 report.py --scored \
+  "results/runs-20260727T224039Z-scored.jsonl#llm-tldr" \
+  results/runs-baseline-full-20260802T000159Z-scored.jsonl \
+  results/runs-all-20260807T191714Z-scored.jsonl \
+  results/runs-cavemanout-20260808T061447Z-scored.jsonl
+```
+
+`runs-20260727T224039Z` contributes only `llm-tldr`; its `baseline` and the one in
+`runs-20260731T222455Z` are the superseded truncated dump. `report.py` refuses
+duplicate or missing (mode, question) cells, so passing a superseded file whole is
+an error rather than a silently averaged row.
 
 `+caveman-out` rows are the same tokens-in mode re-run with the survey's output-side
 compression overlay; it is orthogonal to the mode, so it appears as its own row
@@ -195,10 +209,10 @@ Per question class (mean /12), tokens-in modes only:
 | class | cce | baseline | repomix | caveman-compr | tldr-then-cce | tldr-struct | voitta-rag † | voitta-rag-java † | tldr-then-rag † | llm-tldr |
 |---|---|---|---|---|---|---|---|---|---|---|
 | architecture | 12 | 11 | 12 | 10 | 11 | 7 | 7 | 7 | 6 | 2 |
-| change-planning | 11 | 7 | 9 | 10 | 10 | 9 | 9 | 6 | 7 | 3 |
+| change-planning | 11 | 10 | 9 | 10 | 10 | 9 | 9 | 6 | 7 | 3 |
 | edge-case-dependency | 11 | 11 | 11 | 11 | 11 | 7 | 3 | 5 | 3 | 1 |
-| implementation-lookup | 12 | 9.5 | 9 | 11 | 11 | 7 | 6 | 5 | 4 | 5 |
-| path-tracing | 11 | 8.5 | 11 | 10 | 12 | 3 | 1 | 1 | 1 | 1 |
+| implementation-lookup | 12 | 10 | 9 | 11 | 11 | 7 | 6 | 5 | 4 | 5 |
+| path-tracing | 11 | 12 | 11 | 10 | 12 | 3 | 1 | 1 | 1 | 1 |
 
 ### The headline: don't fill the window, let the model go get it
 
@@ -321,7 +335,7 @@ noise. Measure the rendered answer.
 
 ### Cost
 
-**$30.95 answering + $51.90 judging = $82.85 across 75 scored cells.**
+**$28.25 answering + $51.90 judging = $80.15 across the 70 scored cells in the tables above.**
 
 Judging costs more than answering. That is not overhead -- verification is a
 tool-using agent reading real source, and it is the only reason any of the
