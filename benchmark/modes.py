@@ -444,7 +444,8 @@ def build_voitta_rag_java(config, repo_root, question):
 
 def build_voitta_rag(config, repo_root, question, index=None):
     """Retrieved chunks from a running voitta-rag instance over MCP."""
-    folders = _expand_index_folders(index or config["voitta_rag_index"])
+    spec = index or config["voitta_rag_index"]
+    folders = _expand_index_folders(spec)
     raw = asyncio.run(
         _voitta_rag_search(
             config["voitta_rag_mcp_url"],
@@ -463,6 +464,12 @@ def build_voitta_rag(config, repo_root, question, index=None):
         rendered = []
         for item in parsed:
             path = item.get("file_path") or item.get("path") or "unknown"
+            # voitta-rag returns paths under the index name ("jsoup/src/...");
+            # the judge resolves citations against the checkout root ("src/..."),
+            # so a prefixed path the model copies would be scored as bogus.
+            prefix = spec["name"] + "/"
+            if path.startswith(prefix):
+                path = path[len(prefix):]
             text = item.get("text") or item.get("content") or ""
             score = item.get("score")
             rendered.append(

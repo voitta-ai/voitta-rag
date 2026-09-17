@@ -254,6 +254,18 @@ correct chunk still cannot cite `file:line` and reconstructs one. This is the sa
 failure as the first llm-tldr adapter, from the same cause, and it is the highest-
 value fix for this arm.
 
+**Caveat on the RAG rows: their bogus counts are inflated by a path-prefix artifact.**
+voitta-rag returns `file_path` under the index name (`jsoup/src/...`,
+`jsoup-javaonly/src/...`), and the adapter injected those paths verbatim. Answers
+copied the prefix, and the judge, which resolves citations against the checkout root
+(`src/...`), scored every such citation as bogus even when the quoted code was real;
+its notes flag the prefix in 13 of the 15 `voitta-rag` / `voitta-rag-java` answers.
+The missing line numbers above are still a real cause, but the verified / bogus
+split and the citation-accuracy component of these scores (`voitta-rag`,
+`voitta-rag-java`, `llm-tldr-then-voitta-rag`, and their `+caveman-out` rows) are
+not comparable with the other arms. `modes.py` now strips the index prefix before
+injection; these arms have not been re-run since that fix.
+
 Chaining does not rescue it either: `llm-tldr-then-voitta-rag` scores 4.20, below
 both of its halves. Chaining onto the agentic loop is the one that works --
 `llm-tldr-then-cce` at 11.00 with **zero bogus citations across all five
@@ -321,6 +333,8 @@ llm-tldr backwards.
 - **One repo, and an unfamiliar one.** The familiar-repo arm in the plan, which is
   where structural indexes should do best, is not measured.
 - **Single judge, single pass, no inter-rater check.**
+- **RAG-arm citation numbers predate the index-prefix fix** (see the caveat under
+  "Retrieval underperforms"); treat their bogus counts as upper bounds.
 - **Agentic `tokens_in` is cumulative**; one-shot modes report a single request.
 - **`caveman-compression` is prose tooling on source code** by the survey's design, not
   the tool used as intended.

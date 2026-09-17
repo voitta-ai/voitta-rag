@@ -182,6 +182,15 @@ def answer_agentic(client, config, repo_root, prompt):
         messages.append({"role": "user", "content": results})
     call_seconds = time.monotonic() - call_start
 
+    # An exhausted loop has no final answer; fail the cell so it is re-run
+    # rather than scored on whatever partial text the last turn carried.
+    if stop_reason == "tool_use":
+        raise RuntimeError(
+            "agentic iteration limit ({0}) exceeded".format(
+                config.get("cce_max_iterations", 40)
+            )
+        )
+
     retval = {
         "tokens_in": tokens_in,
         "tokens_out": tokens_out,
