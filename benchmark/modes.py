@@ -71,7 +71,7 @@ def build_baseline(config, repo_root, question):
     # fails loudly there; a deliberately budgeted dump still gets the banner below.
     if config.get("baseline_require_full", False):
         assert included == len(paths), f"{included} of {len(paths)}"
-        assert any(p.endswith("/Parser.java") for p in paths)
+        assert any(p.endswith("/Parser.java") for p in paths[:included])
 
     if included == len(paths):
         header = (
