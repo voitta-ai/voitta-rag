@@ -120,6 +120,10 @@ python3 judge.py  --runs results/runs-<stamp>.jsonl
 python3 report.py --scored results/runs-<stamp>-scored.jsonl
 ```
 
+`report.py` exits with an error if any record errored or went unscored, since
+means over the surviving cells would be biased; `--allow-incomplete` overrides it
+(needed for `results/runs-20260727T224039Z-scored.jsonl`, which has one such record).
+
 `runner.py --modes cce` re-runs a single mode; `--caveman-output` applies the
 output-side overlay. `report.py --scored` takes several files, so arms run at
 different times report together. Both scripts append, so a failed mode can be
@@ -176,16 +180,19 @@ rather than being averaged in.
 | caveman-compression | 5 | 10.40 | 363,613 | 5,048 | 53.7 | 0.7777 | 86 | 1 |
 | cce +caveman-out | 5 | 10.40 | 230,064 | 4,916 | 70.9 | 0.5093 | 129 | 2 |
 | llm-tldr-structural | 5 | 6.60 | 66,895 | 1,824 | 18.5 | 0.1520 | 83 | 1 |
-| voitta-rag | 5 | 5.20 | 4,337 | 2,024 | 20.5 | 0.0289 | 26 | 24 |
-| voitta-rag-java | 5 | 4.80 | 4,334 | 2,314 | 22.9 | 0.0318 | 30 | 29 |
-| voitta-rag-java +caveman-out | 5 | 4.60 | 4,413 | 2,483 | 27.1 | 0.0337 | 8 | 41 |
-| llm-tldr-then-voitta-rag | 5 | 4.20 | 9,305 | 2,552 | 26.0 | 0.0441 | 36 | 15 |
+| voitta-rag † | 5 | 5.20 | 4,337 | 2,024 | 20.5 | 0.0289 | 26 | 24 |
+| voitta-rag-java † | 5 | 4.80 | 4,334 | 2,314 | 22.9 | 0.0318 | 30 | 29 |
+| voitta-rag-java +caveman-out † | 5 | 4.60 | 4,413 | 2,483 | 27.1 | 0.0337 | 8 | 41 |
+| llm-tldr-then-voitta-rag † | 5 | 4.20 | 9,305 | 2,552 | 26.0 | 0.0441 | 36 | 15 |
 | llm-tldr +caveman-out | 5 | 3.40 | 5,258 | 1,063 | 12.1 | 0.0212 | 1 | 33 |
 | llm-tldr | 5 | 2.40 | 5,179 | 1,325 | 13.6 | 0.0236 | 2 | 29 |
 
+† Scores and citation counts include a path-prefix scoring artifact; see the caveat
+under "Retrieval underperforms". Not comparable with the other rows.
+
 Per question class (mean /12), tokens-in modes only:
 
-| class | cce | baseline | repomix | caveman-compr | tldr-then-cce | tldr-struct | voitta-rag | voitta-rag-java | tldr-then-rag | llm-tldr |
+| class | cce | baseline | repomix | caveman-compr | tldr-then-cce | tldr-struct | voitta-rag † | voitta-rag-java † | tldr-then-rag † | llm-tldr |
 |---|---|---|---|---|---|---|---|---|---|---|
 | architecture | 12 | 11 | 12 | 10 | 11 | 7 | 7 | 7 | 6 | 2 |
 | change-planning | 11 | 7 | 9 | 10 | 10 | 9 | 9 | 6 | 7 | 3 |

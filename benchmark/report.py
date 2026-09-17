@@ -36,6 +36,11 @@ def mode_key(record):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--scored", required=True, nargs="+")
+    parser.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="report even if some records errored or were not scored",
+    )
     args = parser.parse_args()
 
     records = load(args.scored)
@@ -47,6 +52,14 @@ def main():
             dropped += 1
             continue
         by_mode[mode_key(record)].append(record)
+
+    # Means over a mode that lost cells are biased toward the cells that
+    # survived, so an incomplete matrix is an error unless asked for.
+    if dropped and not args.allow_incomplete:
+        raise SystemExit(
+            "{0} record(s) errored or unscored; re-run them, or pass "
+            "--allow-incomplete to report anyway.".format(dropped)
+        )
 
     def mean(rows, fn):
         values = [fn(r) for r in rows if fn(r) is not None]
