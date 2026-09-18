@@ -69,3 +69,6 @@ scripts/import_repos_personal.json
 CLAUDE.md
 docker-compose.override.yml
 .gitnexus
+
+# Benchmark machine-local config (copy of config.example.json with real paths)
+benchmark/config.local.json
