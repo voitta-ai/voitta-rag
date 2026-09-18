@@ -23,14 +23,25 @@ def load(specs):
     for spec in specs:
         path, _, selector = spec.partition("#")
         wanted = {m.strip() for m in selector.split(",")} if selector else None
+        matched = set()
         with open(path) as handle:
             for line in handle:
                 line = line.strip()
                 if not line:
                     continue
                 record = json.loads(line)
-                if wanted is None or mode_key(record) in wanted:
+                key = mode_key(record)
+                if wanted is None or key in wanted:
+                    matched.add(key)
                     records.append(record)
+        # A selector that matches nothing is a typo or a stale mode name, not an
+        # intentional omission: the gates below only ever see filtered records.
+        if wanted and wanted - matched:
+            raise SystemExit(
+                "{0}: selected mode(s) not in file: {1}".format(
+                    path, ", ".join(sorted(wanted - matched))
+                )
+            )
     return records
 
 
@@ -128,8 +139,10 @@ def main():
             )
         )
 
-    print("\nby question class (mean score/12)")
-    modes = sorted(by_mode)
+    # Default output style only: the caveman-out rows are the same tokens-in
+    # modes re-run, so listing them here would double every column.
+    print("\nby question class (mean score/12, default output style only)")
+    modes = sorted(m for m in by_mode if not m.endswith("+caveman-out"))
     label_width = 26
     print("class".ljust(label_width) + "".join(m[:17].ljust(19) for m in modes))
     print("-" * (label_width + 19 * len(modes)))

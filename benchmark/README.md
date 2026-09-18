@@ -204,7 +204,7 @@ rather than being averaged in.
 † Scores and citation counts include a path-prefix scoring artifact; see the caveat
 under "Retrieval underperforms". Not comparable with the other rows.
 
-Per question class (mean /12), tokens-in modes only:
+Per question class (mean /12), default output style only:
 
 | class | cce | baseline | repomix | caveman-compr | tldr-then-cce | tldr-struct | voitta-rag † | voitta-rag-java † | tldr-then-rag † | llm-tldr |
 |---|---|---|---|---|---|---|---|---|---|---|
