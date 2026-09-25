@@ -304,6 +304,7 @@ def main():
 
     total = len(questions) * len(selected_modes)
     done = 0
+    answered = 0
     with open(out_path, "a") as handle:
         for question in questions:
             for mode in selected_modes:
@@ -336,19 +337,36 @@ def main():
                     }
                     print("{0} FAILED: {1}".format(label, record["error"]))
                 else:
-                    print(
-                        "{0} in={1} out={2} {3}s ${4}".format(
-                            label,
-                            record["tokens_in"],
-                            record["tokens_out"],
-                            record["wall_time_s"],
-                            record["cost_usd"],
+                    # An empty answer is a failed cell, not a cheap one: a refusal,
+                    # or a response that spent max_tokens on thinking, would
+                    # otherwise be judged as if it were an answer. Mark it in place
+                    # rather than raising, so its cost stays in the record.
+                    if not record["raw_output"].strip():
+                        record["error"] = "empty answer (stop_reason={0})".format(
+                            record["stop_reason"]
                         )
-                    )
+                        print("{0} FAILED: {1}".format(label, record["error"]))
+                    else:
+                        answered += 1
+                        print(
+                            "{0} in={1} out={2} {3}s ${4}".format(
+                                label,
+                                record["tokens_in"],
+                                record["tokens_out"],
+                                record["wall_time_s"],
+                                record["cost_usd"],
+                            )
+                        )
                 handle.write(json.dumps(record) + "\n")
                 handle.flush()
 
     print("\nwrote {0}".format(out_path))
+
+    # A run where nothing answered is a setup failure (unresolved credentials,
+    # an unreachable index), not a set of results: fail rather than leave a file
+    # of error records that looks like a completed run.
+    if total and answered == 0:
+        raise SystemExit("every cell errored; no answers were produced")
 
 
 if __name__ == "__main__":
