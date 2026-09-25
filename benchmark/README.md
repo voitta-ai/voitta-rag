@@ -281,8 +281,10 @@ The ordering reversed: corpus-matched is now the higher of the two. **Read that 
 unresolved, not as a finding.** The 0.40 gap is the same size as the gap that ran
 the other way before, both arms moved, and five questions cannot separate them --
 the same caution the known-limits section applies to the 10.40-10.80 cluster. What
-can be said is that the earlier claim, that matching the corpus made things
-measurably worse, was an artifact.
+can be said is narrower: the earlier claim that matching the corpus made things
+measurably worse is not supported. These are independent stochastic runs weeks
+apart, so the reversal does not prove the prefix bug caused the earlier ordering
+either -- neither five-question run separates the two corpus configurations.
 
 What did not change is the mechanism behind the fabricated citations. The chunk
 record has `chunk_index` but **no line numbers**, so a model handed a correct chunk
