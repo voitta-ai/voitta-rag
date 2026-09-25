@@ -364,8 +364,8 @@ llm-tldr backwards.
   where structural indexes should do best, is not measured.
 - **Single judge, single pass, no inter-rater check.**
 - **The two RAG corpus arms are not separated by this question set.** 5.00 vs 5.40
-  reversed the earlier 5.20 vs 4.80 after a scoring fix; both orderings are inside
-  the noise at n=5.
+  reversed the earlier 5.20 vs 4.80 after the index-prefix fix and an independent
+  re-run; both orderings are inside the noise at n=5.
 - **Agentic `tokens_in` is cumulative**; one-shot modes report a single request.
 - **`caveman-compression` is prose tooling on source code** by the survey's design, not
   the tool used as intended.
