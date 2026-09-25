@@ -160,7 +160,7 @@ for assembling the dump, never a token estimate.
 **Self-reference.** voitta-rag and llm-tldr are Python; the repo under test is
 Java. No tool is retrieving over its own source.
 
-## Results — 2026-08-08
+## Results — 2026-08-08, RAG arms re-run 2026-09-25
 
 jsoup @ `d24b16d9`, 97 `.java` files (tests and `target/` excluded). Answers on
 Claude Sonnet 5 at effort `high`; judge Claude Opus 5 at effort `high` with
@@ -171,12 +171,16 @@ Raw records in `results/`. Both tables and the cost line are reproduced by:
 python3 report.py --scored \
   "results/runs-20260727T224039Z-scored.jsonl#llm-tldr" \
   results/runs-baseline-full-20260802T000159Z-scored.jsonl \
-  results/runs-all-20260807T191714Z-scored.jsonl \
-  results/runs-cavemanout-20260808T061447Z-scored.jsonl
+  "results/runs-all-20260807T191714Z-scored.jsonl#llm-tldr-structural,repomix,caveman-compression,cce,llm-tldr-then-cce" \
+  "results/runs-cavemanout-20260808T061447Z-scored.jsonl#baseline +caveman-out,llm-tldr +caveman-out,cce +caveman-out" \
+  results/runs-ragfix-20260925T175222Z-scored.jsonl \
+  results/runs-ragfix-cavemanout-20260925T175222Z-scored.jsonl
 ```
 
 `runs-20260727T224039Z` contributes only `llm-tldr`; its `baseline` and the one in
-`runs-20260731T222455Z` are the superseded truncated dump. `report.py` refuses
+`runs-20260731T222455Z` are the superseded truncated dump. The four RAG arms come
+from the `runs-ragfix-*` files, re-run on 2026-09-25 after the index-prefix fix; the
+`runs-all` / `runs-cavemanout` selectors exclude their superseded RAG cells. `report.py` refuses
 duplicate or missing (mode, question) cells, so passing a superseded file whole is
 an error rather than a silently averaged row.
 
@@ -194,25 +198,22 @@ rather than being averaged in.
 | caveman-compression | 5 | 10.40 | 363,613 | 5,048 | 53.7 | 0.7777 | 86 | 1 |
 | cce +caveman-out | 5 | 10.40 | 230,064 | 4,916 | 70.9 | 0.5093 | 129 | 2 |
 | llm-tldr-structural | 5 | 6.60 | 66,895 | 1,824 | 18.5 | 0.1520 | 83 | 1 |
-| voitta-rag † | 5 | 5.20 | 4,337 | 2,024 | 20.5 | 0.0289 | 26 | 24 |
-| voitta-rag-java † | 5 | 4.80 | 4,334 | 2,314 | 22.9 | 0.0318 | 30 | 29 |
-| voitta-rag-java +caveman-out † | 5 | 4.60 | 4,413 | 2,483 | 27.1 | 0.0337 | 8 | 41 |
-| llm-tldr-then-voitta-rag † | 5 | 4.20 | 9,305 | 2,552 | 26.0 | 0.0441 | 36 | 15 |
+| llm-tldr-then-voitta-rag | 5 | 5.60 | 9,219 | 1,992 | 18.4 | 0.0384 | 32 | 17 |
+| voitta-rag-java +caveman-out | 5 | 5.60 | 4,213 | 2,346 | 24.6 | 0.0319 | 36 | 41 |
+| voitta-rag-java | 5 | 5.40 | 4,134 | 3,140 | 28.6 | 0.0397 | 21 | 29 |
+| voitta-rag | 5 | 5.00 | 4,237 | 2,686 | 26.5 | 0.0353 | 31 | 15 |
 | llm-tldr +caveman-out | 5 | 3.40 | 5,258 | 1,063 | 12.1 | 0.0212 | 1 | 33 |
 | llm-tldr | 5 | 2.40 | 5,179 | 1,325 | 13.6 | 0.0236 | 2 | 29 |
 
-† Scores and citation counts include a path-prefix scoring artifact; see the caveat
-under "Retrieval underperforms". Not comparable with the other rows.
-
 Per question class (mean /12), default output style only:
 
-| class | cce | baseline | repomix | caveman-compr | tldr-then-cce | tldr-struct | voitta-rag † | voitta-rag-java † | tldr-then-rag † | llm-tldr |
+| class | cce | baseline | repomix | caveman-compr | tldr-then-cce | tldr-struct | voitta-rag | voitta-rag-java | tldr-then-rag | llm-tldr |
 |---|---|---|---|---|---|---|---|---|---|---|
-| architecture | 12 | 11 | 12 | 10 | 11 | 7 | 7 | 7 | 6 | 2 |
-| change-planning | 11 | 10 | 9 | 10 | 10 | 9 | 9 | 6 | 7 | 3 |
-| edge-case-dependency | 11 | 11 | 11 | 11 | 11 | 7 | 3 | 5 | 3 | 1 |
-| implementation-lookup | 12 | 10 | 9 | 11 | 11 | 7 | 6 | 5 | 4 | 5 |
-| path-tracing | 11 | 12 | 11 | 10 | 12 | 3 | 1 | 1 | 1 | 1 |
+| architecture | 12 | 11 | 12 | 10 | 11 | 7 | 7 | 4 | 8 | 2 |
+| change-planning | 11 | 10 | 9 | 10 | 10 | 9 | 5 | 7 | 9 | 3 |
+| edge-case-dependency | 11 | 11 | 11 | 11 | 11 | 7 | 4 | 5 | 3 | 1 |
+| implementation-lookup | 12 | 10 | 9 | 11 | 11 | 7 | 7 | 7 | 5 | 5 |
+| path-tracing | 11 | 12 | 11 | 10 | 12 | 3 | 2 | 4 | 3 | 1 |
 
 ### The headline: don't fill the window, let the model go get it
 
@@ -257,40 +258,45 @@ the pick.
 (`tldr structure` was the other candidate adapter and is unusable here: no line
 numbers at all, and it parses 50 of the 97 files.)
 
-### Retrieval underperforms here, and the corpus was not the reason
+### Retrieval underperforms here, and the corpus question is unresolved
 
-The previous writeup blamed voitta-rag's score on corpus asymmetry -- it indexed
-233 files including changelogs while the other arms saw 97 `.java` files. That
-hypothesis is now tested directly and **it was wrong**:
+The first writeup blamed voitta-rag's score on corpus asymmetry -- it indexed 233
+files including changelogs while the other arms saw 97 `.java` files -- and the
+second claimed that hypothesis was tested and wrong. Neither conclusion survives.
+The scores it rested on carried a path-prefix scoring artifact: voitta-rag returns
+`file_path` under the index name (`jsoup/src/...`), the adapter injected those paths
+verbatim, answers copied them, and the judge, which resolves citations against the
+checkout root (`src/...`), scored every such citation as bogus even when the quoted
+code was real. The judge's notes flagged the prefix in 13 of those 15 answers.
+
+`modes.py` now strips the index prefix before injection, and all four RAG arms were
+re-run on 2026-09-25 against the same corpus at the same commit:
 
 | | score | verified | bogus |
 |---|---|---|---|
-| `voitta-rag` (233 files, whole checkout) | 5.20 | 26 | 24 |
-| `voitta-rag-java` (97 files, exactly the benchmark corpus) | 4.80 | 30 | 29 |
+| `voitta-rag` (233 files, whole checkout) | 5.00 (was 5.20) | 31 (was 26) | 15 (was 24) |
+| `voitta-rag-java` (97 files, exactly the benchmark corpus) | 5.40 (was 4.80) | 21 (was 30) | 29 (was 29) |
 
-Matching the corpus did not help; it scored marginally *lower*. Both arms carry
-roughly as many bogus citations as verified ones. The mechanism is visible in the
-chunk record: it has `chunk_index` but **no line numbers**, so a model given a
-correct chunk still cannot cite `file:line` and reconstructs one. This is the same
-failure as the first llm-tldr adapter, from the same cause, and it is the highest-
-value fix for this arm.
+The ordering reversed: corpus-matched is now the higher of the two. **Read that as
+unresolved, not as a finding.** The 0.40 gap is the same size as the gap that ran
+the other way before, both arms moved, and five questions cannot separate them --
+the same caution the known-limits section applies to the 10.40-10.80 cluster. What
+can be said is that the earlier claim, that matching the corpus made things
+measurably worse, was an artifact.
 
-**Caveat on the RAG rows: their bogus counts are inflated by a path-prefix artifact.**
-voitta-rag returns `file_path` under the index name (`jsoup/src/...`,
-`jsoup-javaonly/src/...`), and the adapter injected those paths verbatim. Answers
-copied the prefix, and the judge, which resolves citations against the checkout root
-(`src/...`), scored every such citation as bogus even when the quoted code was real;
-its notes flag the prefix in 13 of the 15 `voitta-rag` / `voitta-rag-java` answers.
-The missing line numbers above are still a real cause, but the verified / bogus
-split and the citation-accuracy component of these scores (`voitta-rag`,
-`voitta-rag-java`, `llm-tldr-then-voitta-rag`, and their `+caveman-out` rows) are
-not comparable with the other arms. `modes.py` now strips the index prefix before
-injection; these arms have not been re-run since that fix.
+What did not change is the mechanism behind the fabricated citations. The chunk
+record has `chunk_index` but **no line numbers**, so a model handed a correct chunk
+still cannot cite `file:line` and reconstructs one; `voitta-rag-java` still carries
+29 bogus citations against 21 verified. That is the same failure as the first
+llm-tldr adapter, from the same cause, and it remains the highest-value fix for this
+arm. The prefix bug sat on top of it and inflated the counts; removing it moved
+`voitta-rag`'s bogus count from 24 to 15 without making the arm competitive.
 
-Chaining does not rescue it either: `llm-tldr-then-voitta-rag` scores 4.20, below
-both of its halves. Chaining onto the agentic loop is the one that works --
-`llm-tldr-then-cce` at 11.00 with **zero bogus citations across all five
-questions** -- though it does not beat plain `cce`, so the seed earns nothing here.
+Chaining now helps rather than hurts: `llm-tldr-then-voitta-rag` scores 5.60, above
+both of its halves (2.40 and 5.00), where before the fix it scored 4.20, below them.
+Chaining onto the agentic loop is still the one that works -- `llm-tldr-then-cce` at
+11.00 with **zero bogus citations across all five questions** -- though it does not
+beat plain `cce`, so the seed earns nothing there.
 
 ### Repomix is the same dump with a nicer cover page
 
@@ -317,13 +323,14 @@ LLM-backed variant was deliberately not used -- a non-deterministic compressor
 inside a cell makes the cell unattributable.
 
 **Output side.** The overlay reliably shrinks the visible answer at little quality
-cost:
+cost (the `voitta-rag-java` row is from the 2026-09-25 re-run; the others are from
+2026-08-08):
 
 | mode | answer chars | with overlay | score | with overlay |
 |---|---|---|---|---|
 | baseline | 5,699 | 4,496 (-21%) | 10.80 | 10.60 |
 | cce | 6,389 | 4,029 (-37%) | 11.40 | 10.40 |
-| voitta-rag-java | 4,665 | 3,659 (-22%) | 4.80 | 4.60 |
+| voitta-rag-java | 6,018 | 3,696 (-39%) | 5.40 | 5.60 |
 | llm-tldr | 2,387 | 1,862 (-22%) | 2.40 | 3.40 |
 
 **But you cannot measure the output axis with `tokens_out` while adaptive thinking
@@ -335,7 +342,7 @@ noise. Measure the rendered answer.
 
 ### Cost
 
-**$28.25 answering + $51.90 judging = $80.15 across the 70 scored cells in the tables above.**
+**$28.28 answering + $50.74 judging = $79.03 across the 70 scored cells in the tables above.**
 
 Judging costs more than answering. That is not overhead -- verification is a
 tool-using agent reading real source, and it is the only reason any of the
@@ -354,8 +361,9 @@ llm-tldr backwards.
 - **One repo, and an unfamiliar one.** The familiar-repo arm in the plan, which is
   where structural indexes should do best, is not measured.
 - **Single judge, single pass, no inter-rater check.**
-- **RAG-arm citation numbers predate the index-prefix fix** (see the caveat under
-  "Retrieval underperforms"); treat their bogus counts as upper bounds.
+- **The two RAG corpus arms are not separated by this question set.** 5.00 vs 5.40
+  reversed the earlier 5.20 vs 4.80 after a scoring fix; both orderings are inside
+  the noise at n=5.
 - **Agentic `tokens_in` is cumulative**; one-shot modes report a single request.
 - **`caveman-compression` is prose tooling on source code** by the survey's design, not
   the tool used as intended.
