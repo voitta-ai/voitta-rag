@@ -270,7 +270,8 @@ checkout root (`src/...`), scored every such citation as bogus even when the quo
 code was real. The judge's notes flagged the prefix in 13 of those 15 answers.
 
 `modes.py` now strips the index prefix before injection, and all four RAG arms were
-re-run on 2026-09-25 against the same corpus at the same commit:
+re-run on 2026-09-25 against jsoup at the same commit, each arm over the same corpus
+it indexed in the original run (233 files for `voitta-rag`, 97 for `voitta-rag-java`):
 
 | | score | verified | bogus |
 |---|---|---|---|
