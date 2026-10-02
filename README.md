@@ -162,7 +162,7 @@ Runs voitta-rag directly with Python on your machine. Requires Python 3.11+ (see
 # Start Qdrant (vector database)
 mkdir -p qdrant_storage
 docker run -d --name qdrant \
-  -p 6333:6333 -p 6334:6334 \
+  -p 127.0.0.1:6333:6333 -p 127.0.0.1:6334:6334 \
   -v $(pwd)/qdrant_storage:/qdrant/storage \
   qdrant/qdrant
 
