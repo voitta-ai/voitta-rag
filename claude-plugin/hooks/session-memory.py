@@ -106,77 +106,102 @@ REDACTED = "[REDACTED-SECRET]"
 # resurface in a later session's context long after the original secret was
 # rotated -- or, worse, before.
 #
-# Ordered so that longer prefixes match first: github_pat_ must be tried before
-# the shorter gh?_ forms, or it gets half-eaten.
-_SECRET_PATTERNS = [
+# On top of that, every detector reports the character spans it would redact;
+# the union of all spans is then replaced. Detectors never see each
+# other's output, so their order cannot matter (one cannot split a token another
+# would have taken whole), and widening coverage can only add spans: anything an
+# earlier detector redacted stays redacted.
+#
+# The redactor exactly as shipped in #53, kept verbatim and applied FIRST, so
+# the layers below can only add redaction: nothing #53 removed can reappear.
+_LEGACY_PATTERNS = [
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
     re.compile(r"glpat-[A-Za-z0-9\-_]{20,}"),
-    # Slack: xox?- are bot/user/app tokens, xapp- is an app-level token,
-    # which is a different shape and is easy to miss.
     re.compile(r"xox[baprse]-[A-Za-z0-9\-]{10,}"),
     re.compile(r"xapp-[0-9]-[A-Za-z0-9\-]{10,}"),
     re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"),
-    # OpenAI project/service-account/admin keys: the prefix is the evidence.
-    re.compile(r"(?<![A-Za-z0-9_\-])sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"),
-    # OpenAI legacy keys: sk- plus one unbroken alphanumeric run of 20+ that
-    # ends the token. A run that continues into "-word" is kebab-case text
-    # (sk-internationalization-placeholder), not a key.
-    re.compile(r"(?<![A-Za-z0-9_\-])sk-[A-Za-z0-9]{20,}(?![A-Za-z0-9_\-])"),
-    # JWTs: compact JWS whose header is base64url JSON, which always starts
-    # "ey" ('{' then '"' or a space). The payload is not assumed ({} is e30).
-    # Anchored on a non-token character so a failed match does not rescan.
-    re.compile(
-        r"(?<![A-Za-z0-9_\-])ey[A-Za-z0-9_\-]{14,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]{10,}"
-    ),
+    re.compile(r"sk-[A-Za-z0-9]{20,}"),
     re.compile(
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
         re.DOTALL,
     ),
-    # URLs of the form scheme://user:secret@host, which is how a PAT ends up in
-    # a git remote and therefore in any transcript that echoed one.
     re.compile(r"(?<=://)([^/\s:@]+):([^/\s@]+)(?=@)"),
 ]
-
-# Assignment-shaped secrets: redact only the value, keep the name so the
-# surrounding text still reads. The name may carry a prefix (API_TOKEN,
-# DB_PASSWORD): a bare \btoken\b never matches inside API_TOKEN, because "_"
-# is a word character.
-# A quoted key ("API_TOKEN": "...") is allowed.
-# A quoted value is a literal: everything up to the matching unescaped quote is
-# redacted, however short, spaces and escaped quotes included (passphrases).
-# An unquoted value (or one whose closing quote never comes, e.g. a truncated
-# line) of 8+ characters is redacted unless it is a call such as
-# lexer.next_token(). That deliberately over-redacts plain attribute access
-# (token = response.access_token) rather than guess which bare words are
-# credentials: letter-only passwords exist, and per the docstring a false
-# positive is the cheaper error. The value is matched atomically (lookahead +
-# backreference; possessive quantifiers need Python 3.11) and includes "." and
-# "~", so a dotted token is redacted whole.
-_SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b((?:[a-z0-9]+_)*(?:api[_-]?key|secret|password|passwd|token))\b"
-    r"(?:"
-    r"([\"']?\s*[=:]\s*)([\"'])(?:\\.|(?!\3)[^\\\n])+(?=\3)"
-    r"|"
-    r"([\"']?\s*[=:]\s*[\"']?)(?=([A-Za-z0-9/+=_\-.~]{8,}))\5(?!\()"
-    r")",
+_LEGACY_ASSIGNMENT = re.compile(
+    r"(?i)\b(api[_-]?key|secret|password|passwd|token)\b(\s*[=:]\s*[\"']?)"
+    r"([A-Za-z0-9/+=_\-]{16,})",
 )
 
 
-def _redact_assignment(match):
-    if match.group(3) is not None:
-        retval = match.group(1) + match.group(2) + match.group(3) + REDACTED
-    else:
-        retval = match.group(1) + match.group(4) + REDACTED
+def _legacy_redact(text):
+    for pattern in _LEGACY_PATTERNS[:-1]:
+        text = pattern.sub(REDACTED, text)
+    text = _LEGACY_PATTERNS[-1].sub(r"\1:" + REDACTED, text)
+    text = _LEGACY_ASSIGNMENT.sub(r"\1\2" + REDACTED, text)
+    retval = text
     return retval
 
 
-# Authorization: Bearer <token>. Scoped to the header; whatever follows the
-# scheme is redacted, however short, because the header is the evidence. Prose
-# shaped exactly like the header ("Authorization: bearer of ...") is
-# over-redacted, which is the cheaper error. Runs first: the substring
-# patterns would otherwise split a token and leave the rest behind.
-_BEARER = re.compile(r"(?i)(\bauthorization[\"']?\s*[:=]\s*[\"']?bearer\s+)([^\s\"']+)")
+# (pattern, group): the group whose span is the secret; 0 is the whole match.
+_SPAN_PATTERNS = [
+    (re.compile(r"github_pat_[A-Za-z0-9_]{20,}"), 0),
+    (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), 0),
+    (re.compile(r"glpat-[A-Za-z0-9\-_]{20,}"), 0),
+    # Slack: xox?- are bot/user/app tokens, xapp- is an app-level token,
+    # which is a different shape and is easy to miss.
+    (re.compile(r"xox[baprse]-[A-Za-z0-9\-]{10,}"), 0),
+    (re.compile(r"xapp-[0-9]-[A-Za-z0-9\-]{10,}"), 0),
+    (re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"), 0),
+    # OpenAI: legacy sk- keys, and project/service-account/admin keys whose
+    # sk-proj- style prefix carries a hyphen the legacy form does not allow.
+    (re.compile(r"sk-[A-Za-z0-9]{20,}"), 0),
+    (re.compile(r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"), 0),
+    # JWTs: compact JWS whose header is base64url JSON. '{' followed by '"',
+    # a space, a tab or a newline encodes as "ey" or "ew". The payload is not
+    # assumed ({} is e30). The lookbehind keeps failed matches from rescanning.
+    (re.compile(r"(?<![A-Za-z0-9_\-])e[wy][A-Za-z0-9_\-]{14,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]{10,}"), 0),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL), 0),
+    # URLs of the form scheme://user:secret@host, which is how a PAT ends up in
+    # a git remote and therefore in any transcript that echoed one.
+    (re.compile(r"(?<=://)([^/\s:@]+):([^/\s@]+)(?=@)"), 2),
+    # Authorization: Bearer <token>. Scoped to the header; whatever follows the
+    # scheme is a credential, however short. Prose shaped exactly like the
+    # header is over-redacted, the cheaper error.
+    (re.compile(r"(?i)\bauthorization[\"']?\s*[:=]\s*[\"']?bearer\s+([^\s\"']+)"), 1),
+    # Assignment-shaped secrets, as shipped in #53: value only, name kept.
+    (re.compile(r"(?i)\b(api[_-]?key|secret|password|passwd|token)\b(\s*[=:]\s*[\"']?)([A-Za-z0-9/+=_\-]{16,})"), 3),
+    # Assignments with a quoted value: everything to the matching unescaped
+    # quote, however short (passphrases with spaces, escaped quotes). The name
+    # may carry a prefix (API_TOKEN, DB_PASSWORD) and the key may be quoted.
+    (re.compile(
+        r"(?i)\b(?:[a-z0-9]+_)*(?:api[_-]?key|secret|password|passwd|token)\b"
+        r"[\"']?\s*[=:]\s*([\"'])((?:\\.|(?!\1)[^\\\n])+)(?=\1)"
+    ), 2),
+]
+
+# Assignments with an unquoted value (or a quote that never closes, e.g. a
+# truncated line). The value runs to whitespace or a delimiter, so password
+# punctuation (p@ss!word) is kept whole. Filtered in _unquoted_spans, not in
+# the regex, to stay linear.
+_UNQUOTED_ASSIGNMENT = re.compile(
+    r"(?i)\b(?:[a-z0-9]+_)*(?:api[_-]?key|secret|password|passwd|token)\b"
+    r"[\"']?\s*[=:]\s*[\"']?([^\s\"',;<>]{8,})"
+)
+# Code, not a credential: a call on an identifier chain (lexer.next_token()).
+# Plain attribute access (response.access_token) is deliberately NOT exempt:
+# letter-only passwords exist, and a false positive is the cheaper error.
+_CALL_EXPRESSION = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\(\)?")
+
+
+def _unquoted_spans(text):
+    spans = []
+    for match in _UNQUOTED_ASSIGNMENT.finditer(text):
+        if _CALL_EXPRESSION.fullmatch(match.group(1)):
+            continue
+        spans.append(match.span(1))
+    retval = spans
+    return retval
 
 
 def redact_secrets(text: str) -> str:
@@ -186,13 +211,41 @@ def redact_secrets(text: str) -> str:
     little readability in a stored memory, a false negative persists a live
     credential in an embedded, searchable store.
     """
-    text = _BEARER.sub(r"\1" + REDACTED, text)
-    # Assignments before provider patterns, so a dotted value is taken whole.
-    text = _SECRET_ASSIGNMENT.sub(_redact_assignment, text)
-    for pattern in _SECRET_PATTERNS[:-1]:
-        text = pattern.sub(REDACTED, text)
-    text = _SECRET_PATTERNS[-1].sub(r"\1:" + REDACTED, text)
-    retval = text
+    # Matches of one pattern cannot overlap, so a value that runs straight into
+    # the next key ("...cdeaeX-Api-Key: ...") hides that second assignment from
+    # the first pass. A pass only ever inserts markers, which break such runs,
+    # so repeat until nothing changes; each pass is linear.
+    retval = _legacy_redact(text)
+    for _ in range(4):
+        redacted = _redact_pass(retval)
+        if redacted == retval:
+            break
+        retval = redacted
+    return retval
+
+
+def _redact_pass(text):
+    spans = []
+    for pattern, group in _SPAN_PATTERNS:
+        for match in pattern.finditer(text):
+            spans.append(match.span(group))
+    spans.extend(_unquoted_spans(text))
+
+    merged = []
+    for begin, end in sorted(s for s in spans if s[1] > s[0]):
+        if merged and begin <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([begin, end])
+
+    pieces = []
+    cursor = 0
+    for begin, end in merged:
+        pieces.append(text[cursor:begin])
+        pieces.append(REDACTED)
+        cursor = end
+    pieces.append(text[cursor:])
+    retval = "".join(pieces)
     return retval
 
 
