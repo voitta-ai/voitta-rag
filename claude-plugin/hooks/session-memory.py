@@ -117,14 +117,12 @@ _SECRET_PATTERNS = [
     re.compile(r"xox[baprse]-[A-Za-z0-9\-]{10,}"),
     re.compile(r"xapp-[0-9]-[A-Za-z0-9\-]{10,}"),
     re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"),
-    # OpenAI: legacy sk-..., plus project/service-account/admin keys, whose
-    # sk-proj- style prefix carries a hyphen the plain form does not allow.
-    # Real keys contain a long unbroken alphanumeric run; kebab-case prose such
-    # as sk-configuration-V2-placeholder does not.
-    re.compile(
-        r"(?<![A-Za-z0-9_\-])sk-(?:proj-|svcacct-|admin-)?"
-        r"(?=[A-Za-z0-9_\-]*[A-Za-z0-9]{20})[A-Za-z0-9_\-]{20,}"
-    ),
+    # OpenAI project/service-account/admin keys: the prefix is the evidence.
+    re.compile(r"(?<![A-Za-z0-9_\-])sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"),
+    # OpenAI legacy keys: sk- plus one unbroken alphanumeric run of 20+ that
+    # contains an uppercase letter or a digit, so long lowercase words in
+    # kebab-case text (sk-internationalization-...) are left alone.
+    re.compile(r"(?<![A-Za-z0-9_\-])sk-(?=[a-z]*[A-Z0-9])[A-Za-z0-9]{20,}"),
     # JWTs: compact JWS whose header is base64url JSON, which always starts
     # "ey" ('{' then '"' or a space). The payload is not assumed ({} is e30).
     # Anchored on a non-token character so a failed match does not rescan.
@@ -144,18 +142,22 @@ _SECRET_PATTERNS = [
 # surrounding text still reads. The name may carry a prefix (API_TOKEN,
 # DB_PASSWORD): a bare \btoken\b never matches inside API_TOKEN, because "_"
 # is a word character.
-# A quoted key ("API_TOKEN": "...") is allowed. A quoted value is a literal,
-# so it is redacted whatever it contains. An unquoted value must contain a
-# digit: real tokens do, while code such as response.access_token or
-# lexer.next_token() does not. The unquoted value is matched atomically
-# (lookahead + backreference; possessive quantifiers need Python 3.11) and
-# includes "." and "~", so a dotted token is redacted whole.
+# A quoted key ("API_TOKEN": "...") is allowed.
+# A quoted value is a literal: everything up to the matching quote is redacted,
+# spaces included (passphrases).
+# An unquoted value of 8+ characters is redacted unless it is a call such as
+# lexer.next_token(). That deliberately over-redacts plain attribute access
+# (token = response.access_token) rather than guess which bare words are
+# credentials: letter-only passwords exist, and per the docstring a false
+# positive is the cheaper error. The value is matched atomically (lookahead +
+# backreference; possessive quantifiers need Python 3.11) and includes "." and
+# "~", so a dotted token is redacted whole.
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b((?:[a-z0-9]+_)*(?:api[_-]?key|secret|password|passwd|token))\b"
     r"(?:"
-    r"([\"']?\s*[=:]\s*)([\"'])[^\"'\s]{8,}(?=[\"'])"
+    r"([\"']?\s*[=:]\s*)([\"'])(?:(?!\3)[^\n]){8,}(?=\3)"
     r"|"
-    r"([\"']?\s*[=:]\s*)(?=([A-Za-z0-9/+=_\-.~]{16,}))(?=[^\s]*[0-9])\5"
+    r"([\"']?\s*[=:]\s*)(?=([A-Za-z0-9/+=_\-.~]{8,}))\5(?!\()"
     r")",
 )
 
@@ -168,14 +170,12 @@ def _redact_assignment(match):
     return retval
 
 
-# Authorization: Bearer <token>. Scoped to the header, and the token must look
-# like one (a digit, an uppercase letter, or 16+ characters), so prose such as
-# "Authorization: bearer of a signed instrument" is left alone. Runs first:
-# the substring patterns would otherwise split a token and leave the rest.
-_BEARER = re.compile(
-    r"(?i)(\bauthorization[\"']?\s*[:=]\s*[\"']?bearer\s+)"
-    r"(?-i:(?=[^\s\"']*[0-9A-Z]|[^\s\"']{16,})[^\s\"']{8,})"
-)
+# Authorization: Bearer <token>. Scoped to the header; whatever follows the
+# scheme is redacted, however short, because the header is the evidence. Prose
+# shaped exactly like the header ("Authorization: bearer of ...") is
+# over-redacted, which is the cheaper error. Runs first: the substring
+# patterns would otherwise split a token and leave the rest behind.
+_BEARER = re.compile(r"(?i)(\bauthorization[\"']?\s*[:=]\s*[\"']?bearer\s+)([^\s\"']+)")
 
 
 def redact_secrets(text: str) -> str:
