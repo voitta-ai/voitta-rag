@@ -120,9 +120,9 @@ _SECRET_PATTERNS = [
     # OpenAI project/service-account/admin keys: the prefix is the evidence.
     re.compile(r"(?<![A-Za-z0-9_\-])sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"),
     # OpenAI legacy keys: sk- plus one unbroken alphanumeric run of 20+ that
-    # contains an uppercase letter or a digit, so long lowercase words in
-    # kebab-case text (sk-internationalization-...) are left alone.
-    re.compile(r"(?<![A-Za-z0-9_\-])sk-(?=[a-z]*[A-Z0-9])[A-Za-z0-9]{20,}"),
+    # ends the token. A run that continues into "-word" is kebab-case text
+    # (sk-internationalization-placeholder), not a key.
+    re.compile(r"(?<![A-Za-z0-9_\-])sk-[A-Za-z0-9]{20,}(?![A-Za-z0-9_\-])"),
     # JWTs: compact JWS whose header is base64url JSON, which always starts
     # "ey" ('{' then '"' or a space). The payload is not assumed ({} is e30).
     # Anchored on a non-token character so a failed match does not rescan.
@@ -143,9 +143,10 @@ _SECRET_PATTERNS = [
 # DB_PASSWORD): a bare \btoken\b never matches inside API_TOKEN, because "_"
 # is a word character.
 # A quoted key ("API_TOKEN": "...") is allowed.
-# A quoted value is a literal: everything up to the matching quote is redacted,
-# spaces included (passphrases).
-# An unquoted value of 8+ characters is redacted unless it is a call such as
+# A quoted value is a literal: everything up to the matching unescaped quote is
+# redacted, however short, spaces and escaped quotes included (passphrases).
+# An unquoted value (or one whose closing quote never comes, e.g. a truncated
+# line) of 8+ characters is redacted unless it is a call such as
 # lexer.next_token(). That deliberately over-redacts plain attribute access
 # (token = response.access_token) rather than guess which bare words are
 # credentials: letter-only passwords exist, and per the docstring a false
@@ -155,9 +156,9 @@ _SECRET_PATTERNS = [
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b((?:[a-z0-9]+_)*(?:api[_-]?key|secret|password|passwd|token))\b"
     r"(?:"
-    r"([\"']?\s*[=:]\s*)([\"'])(?:(?!\3)[^\n]){8,}(?=\3)"
+    r"([\"']?\s*[=:]\s*)([\"'])(?:\\.|(?!\3)[^\\\n])+(?=\3)"
     r"|"
-    r"([\"']?\s*[=:]\s*)(?=([A-Za-z0-9/+=_\-.~]{8,}))\5(?!\()"
+    r"([\"']?\s*[=:]\s*[\"']?)(?=([A-Za-z0-9/+=_\-.~]{8,}))\5(?!\()"
     r")",
 )
 
