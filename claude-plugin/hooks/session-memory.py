@@ -188,6 +188,11 @@ _SPAN_PATTERNS.append((
     re.compile(re.escape(REDACTED) + r"[\"']?\s*[=:]\s*[\"']?([^\s\"',;<>]{1,})"),
     1,
 ))
+# ...and the same with a quoted value, taken to the matching unescaped quote.
+_SPAN_PATTERNS.append((
+    re.compile(re.escape(REDACTED) + r"[\"']?\s*[=:]\s*([\"'])((?:\\.|(?!\1)[^\\\n])+)(?=\1)"),
+    2,
+))
 
 # Assignments with an unquoted value (or a quote that never closes, e.g. a
 # truncated line). The value runs to whitespace or a delimiter, so password
