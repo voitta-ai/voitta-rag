@@ -119,15 +119,18 @@ _SECRET_PATTERNS = [
     re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"),
     # OpenAI: legacy sk-..., plus project/service-account/admin keys, whose
     # sk-proj- style prefix carries a hyphen the plain form does not allow.
-    # Real keys mix case and digits; requiring both keeps kebab-case prose such
-    # as sk-configuration-management-placeholder out.
+    # Real keys contain a long unbroken alphanumeric run; kebab-case prose such
+    # as sk-configuration-V2-placeholder does not.
     re.compile(
         r"(?<![A-Za-z0-9_\-])sk-(?:proj-|svcacct-|admin-)?"
-        r"(?=[A-Za-z0-9_\-]*[0-9])(?=[A-Za-z0-9_\-]*[A-Z])[A-Za-z0-9_\-]{20,}"
+        r"(?=[A-Za-z0-9_\-]*[A-Za-z0-9]{20})[A-Za-z0-9_\-]{20,}"
     ),
-    # JWTs: compact JWS with a JSON header ("eyJ" is base64url for '{"').
-    # The payload is not assumed to start with eyJ ({} encodes as e30).
-    re.compile(r"\beyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]{10,}"),
+    # JWTs: compact JWS whose header is base64url JSON, which always starts
+    # "ey" ('{' then '"' or a space). The payload is not assumed ({} is e30).
+    # Anchored on a non-token character so a failed match does not rescan.
+    re.compile(
+        r"(?<![A-Za-z0-9_\-])ey[A-Za-z0-9_\-]{14,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]{10,}"
+    ),
     re.compile(
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
         re.DOTALL,
@@ -141,21 +144,38 @@ _SECRET_PATTERNS = [
 # surrounding text still reads. The name may carry a prefix (API_TOKEN,
 # DB_PASSWORD): a bare \btoken\b never matches inside API_TOKEN, because "_"
 # is a word character.
-# A quoted key ("API_TOKEN": "...") is allowed, and the value class includes
-# "." and "~" so a dotted opaque token is redacted whole, not cut at the dot.
-# The value is matched atomically (lookahead + backreference, since possessive
-# quantifiers need Python 3.11) and skipped when it is a call, so code such as
-# `token = lexer.next_token()` survives.
+# A quoted key ("API_TOKEN": "...") is allowed. A quoted value is a literal,
+# so it is redacted whatever it contains. An unquoted value must contain a
+# digit: real tokens do, while code such as response.access_token or
+# lexer.next_token() does not. The unquoted value is matched atomically
+# (lookahead + backreference; possessive quantifiers need Python 3.11) and
+# includes "." and "~", so a dotted token is redacted whole.
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b((?:[a-z0-9]+_)*(?:api[_-]?key|secret|password|passwd|token))\b"
-    r"([\"']?\s*[=:]\s*[\"']?)(?=([A-Za-z0-9/+=_\-.~]{16,}))\3(?!\()",
+    r"(?:"
+    r"([\"']?\s*[=:]\s*)([\"'])[^\"'\s]{8,}(?=[\"'])"
+    r"|"
+    r"([\"']?\s*[=:]\s*)(?=([A-Za-z0-9/+=_\-.~]{16,}))(?=[^\s]*[0-9])\5"
+    r")",
 )
 
-# Authorization: Bearer <anything>. Scoped to the header so prose about "the
-# bearer of" is left alone, with no length floor because the header itself is
-# the evidence. Runs before the substring patterns, which would otherwise split
-# a token and leave the rest behind.
-_BEARER = re.compile(r"(?i)(\bauthorization[\"']?\s*[:=]\s*[\"']?bearer\s+)([^\s\"']+)")
+
+def _redact_assignment(match):
+    if match.group(3) is not None:
+        retval = match.group(1) + match.group(2) + match.group(3) + REDACTED
+    else:
+        retval = match.group(1) + match.group(4) + REDACTED
+    return retval
+
+
+# Authorization: Bearer <token>. Scoped to the header, and the token must look
+# like one (a digit, an uppercase letter, or 16+ characters), so prose such as
+# "Authorization: bearer of a signed instrument" is left alone. Runs first:
+# the substring patterns would otherwise split a token and leave the rest.
+_BEARER = re.compile(
+    r"(?i)(\bauthorization[\"']?\s*[:=]\s*[\"']?bearer\s+)"
+    r"(?-i:(?=[^\s\"']*[0-9A-Z]|[^\s\"']{16,})[^\s\"']{8,})"
+)
 
 
 def redact_secrets(text: str) -> str:
@@ -166,10 +186,11 @@ def redact_secrets(text: str) -> str:
     credential in an embedded, searchable store.
     """
     text = _BEARER.sub(r"\1" + REDACTED, text)
+    # Assignments before provider patterns, so a dotted value is taken whole.
+    text = _SECRET_ASSIGNMENT.sub(_redact_assignment, text)
     for pattern in _SECRET_PATTERNS[:-1]:
         text = pattern.sub(REDACTED, text)
     text = _SECRET_PATTERNS[-1].sub(r"\1:" + REDACTED, text)
-    text = _SECRET_ASSIGNMENT.sub(r"\1\2" + REDACTED, text)
     retval = text
     return retval
 
