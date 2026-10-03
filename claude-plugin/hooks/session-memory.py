@@ -117,7 +117,12 @@ _SECRET_PATTERNS = [
     re.compile(r"xox[baprse]-[A-Za-z0-9\-]{10,}"),
     re.compile(r"xapp-[0-9]-[A-Za-z0-9\-]{10,}"),
     re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"),
-    re.compile(r"sk-[A-Za-z0-9]{20,}"),
+    # OpenAI: legacy sk-..., plus project/service-account/admin keys, whose
+    # sk-proj- style prefix carries a hyphen the plain form does not allow.
+    re.compile(r"(?<![A-Za-z0-9])sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_\-]{20,}"),
+    # JWTs (three base64url segments, header and payload both start "eyJ"),
+    # which is what most Authorization: Bearer values are.
+    re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"),
     re.compile(
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
         re.DOTALL,
@@ -128,11 +133,16 @@ _SECRET_PATTERNS = [
 ]
 
 # Assignment-shaped secrets: redact only the value, keep the name so the
-# surrounding text still reads.
+# surrounding text still reads. The name may carry a prefix (API_TOKEN,
+# DB_PASSWORD): a bare \btoken\b never matches inside API_TOKEN, because "_"
+# is a word character.
 _SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(api[_-]?key|secret|password|passwd|token)\b(\s*[=:]\s*[\"']?)"
-    r"([A-Za-z0-9/+=_\-]{16,})",
+    r"(?i)\b((?:[a-z0-9]+_)*(?:api[_-]?key|secret|password|passwd|token))\b"
+    r"(\s*[=:]\s*[\"']?)([A-Za-z0-9/+=_\-]{16,})",
 )
+
+# Bearer credentials that are not JWTs (opaque tokens): keep the scheme word.
+_BEARER = re.compile(r"(?i)(\bbearer\s+)([A-Za-z0-9\-._~+/]{20,}=*)")
 
 
 def redact_secrets(text: str) -> str:
@@ -146,6 +156,7 @@ def redact_secrets(text: str) -> str:
         text = pattern.sub(REDACTED, text)
     text = _SECRET_PATTERNS[-1].sub(r"\1:" + REDACTED, text)
     text = _SECRET_ASSIGNMENT.sub(r"\1\2" + REDACTED, text)
+    text = _BEARER.sub(r"\1" + REDACTED, text)
     retval = text
     return retval
 
