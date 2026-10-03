@@ -184,13 +184,21 @@ _SPAN_PATTERNS = [
 # label included, so the value is left with only a marker in front of it. A
 # marker directly followed by an assignment operator therefore means "a key was
 # eaten here": redact the value too.
+# The token may eat only part of the label (ghp_...API_TOKEN= leaves _TOKEN),
+# so leftover name characters between the marker and the operator are allowed.
+_EATEN = re.escape(REDACTED) + r"[A-Za-z0-9_\-]*[\"']?\s*"
 _SPAN_PATTERNS.append((
-    re.compile(re.escape(REDACTED) + r"[\"']?\s*[=:]\s*[\"']?([^\s\"',;<>]{1,})"),
+    re.compile(_EATEN + r"[=:]\s*[\"']?([^\s\"',;<>]{1,})"),
+    1,
+))
+# An eaten "Authorization" label: the credential follows "Bearer".
+_SPAN_PATTERNS.append((
+    re.compile(_EATEN + r"[:=]\s*[\"']?(?i:bearer)\s+([^\s\"']+)"),
     1,
 ))
 # ...and the same with a quoted value, taken to the matching unescaped quote.
 _SPAN_PATTERNS.append((
-    re.compile(re.escape(REDACTED) + r"[\"']?\s*[=:]\s*([\"'])((?:\\.|(?!\1)[^\\\n])+)(?=\1)"),
+    re.compile(_EATEN + r"[=:]\s*([\"'])((?:\\.|(?!\1)[^\\\n])+)(?=\1)"),
     2,
 ))
 
