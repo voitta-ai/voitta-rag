@@ -180,6 +180,15 @@ _SPAN_PATTERNS = [
     ), 2),
 ]
 
+# A credential glued to the next key (ghp_...token=value) is consumed whole,
+# label included, so the value is left with only a marker in front of it. A
+# marker directly followed by an assignment operator therefore means "a key was
+# eaten here": redact the value too.
+_SPAN_PATTERNS.append((
+    re.compile(re.escape(REDACTED) + r"[\"']?\s*[=:]\s*[\"']?([^\s\"',;<>]{1,})"),
+    1,
+))
+
 # Assignments with an unquoted value (or a quote that never closes, e.g. a
 # truncated line). The value runs to whitespace or a delimiter, so password
 # punctuation (p@ss!word) is kept whole. Filtered in _unquoted_spans, not in
