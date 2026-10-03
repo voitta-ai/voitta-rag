@@ -119,10 +119,15 @@ _SECRET_PATTERNS = [
     re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"),
     # OpenAI: legacy sk-..., plus project/service-account/admin keys, whose
     # sk-proj- style prefix carries a hyphen the plain form does not allow.
-    re.compile(r"(?<![A-Za-z0-9])sk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_\-]{20,}"),
-    # JWTs (three base64url segments, header and payload both start "eyJ"),
-    # which is what most Authorization: Bearer values are.
-    re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}"),
+    # Real keys mix case and digits; requiring both keeps kebab-case prose such
+    # as sk-configuration-management-placeholder out.
+    re.compile(
+        r"(?<![A-Za-z0-9_\-])sk-(?:proj-|svcacct-|admin-)?"
+        r"(?=[A-Za-z0-9_\-]*[0-9])(?=[A-Za-z0-9_\-]*[A-Z])[A-Za-z0-9_\-]{20,}"
+    ),
+    # JWTs: compact JWS with a JSON header ("eyJ" is base64url for '{"').
+    # The payload is not assumed to start with eyJ ({} encodes as e30).
+    re.compile(r"\beyJ[A-Za-z0-9_\-]{5,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]{10,}"),
     re.compile(
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
         re.DOTALL,
@@ -136,13 +141,21 @@ _SECRET_PATTERNS = [
 # surrounding text still reads. The name may carry a prefix (API_TOKEN,
 # DB_PASSWORD): a bare \btoken\b never matches inside API_TOKEN, because "_"
 # is a word character.
+# A quoted key ("API_TOKEN": "...") is allowed, and the value class includes
+# "." and "~" so a dotted opaque token is redacted whole, not cut at the dot.
+# The value is matched atomically (lookahead + backreference, since possessive
+# quantifiers need Python 3.11) and skipped when it is a call, so code such as
+# `token = lexer.next_token()` survives.
 _SECRET_ASSIGNMENT = re.compile(
     r"(?i)\b((?:[a-z0-9]+_)*(?:api[_-]?key|secret|password|passwd|token))\b"
-    r"(\s*[=:]\s*[\"']?)([A-Za-z0-9/+=_\-]{16,})",
+    r"([\"']?\s*[=:]\s*[\"']?)(?=([A-Za-z0-9/+=_\-.~]{16,}))\3(?!\()",
 )
 
-# Bearer credentials that are not JWTs (opaque tokens): keep the scheme word.
-_BEARER = re.compile(r"(?i)(\bbearer\s+)([A-Za-z0-9\-._~+/]{20,}=*)")
+# Authorization: Bearer <anything>. Scoped to the header so prose about "the
+# bearer of" is left alone, with no length floor because the header itself is
+# the evidence. Runs before the substring patterns, which would otherwise split
+# a token and leave the rest behind.
+_BEARER = re.compile(r"(?i)(\bauthorization[\"']?\s*[:=]\s*[\"']?bearer\s+)([^\s\"']+)")
 
 
 def redact_secrets(text: str) -> str:
@@ -152,11 +165,11 @@ def redact_secrets(text: str) -> str:
     little readability in a stored memory, a false negative persists a live
     credential in an embedded, searchable store.
     """
+    text = _BEARER.sub(r"\1" + REDACTED, text)
     for pattern in _SECRET_PATTERNS[:-1]:
         text = pattern.sub(REDACTED, text)
     text = _SECRET_PATTERNS[-1].sub(r"\1:" + REDACTED, text)
     text = _SECRET_ASSIGNMENT.sub(r"\1\2" + REDACTED, text)
-    text = _BEARER.sub(r"\1" + REDACTED, text)
     retval = text
     return retval
 
