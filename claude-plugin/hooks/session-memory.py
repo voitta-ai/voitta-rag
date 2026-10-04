@@ -106,14 +106,18 @@ REDACTED = "[REDACTED-SECRET]"
 # resurface in a later session's context long after the original secret was
 # rotated -- or, worse, before.
 #
-# Ordered so that longer prefixes match first: github_pat_ must be tried before
-# the shorter gh?_ forms, or it gets half-eaten.
-_SECRET_PATTERNS = [
+# On top of that, every detector reports the character spans it would redact;
+# the union of all spans is then replaced. Detectors never see each
+# other's output, so their order cannot matter (one cannot split a token another
+# would have taken whole), and widening coverage can only add spans: anything an
+# earlier detector redacted stays redacted.
+#
+# The redactor exactly as shipped in #53, kept verbatim and applied FIRST, so
+# the layers below can only add redaction: nothing #53 removed can reappear.
+_LEGACY_PATTERNS = [
     re.compile(r"github_pat_[A-Za-z0-9_]{20,}"),
     re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),
     re.compile(r"glpat-[A-Za-z0-9\-_]{20,}"),
-    # Slack: xox?- are bot/user/app tokens, xapp- is an app-level token,
-    # which is a different shape and is easy to miss.
     re.compile(r"xox[baprse]-[A-Za-z0-9\-]{10,}"),
     re.compile(r"xapp-[0-9]-[A-Za-z0-9\-]{10,}"),
     re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"),
@@ -122,17 +126,104 @@ _SECRET_PATTERNS = [
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
         re.DOTALL,
     ),
-    # URLs of the form scheme://user:secret@host, which is how a PAT ends up in
-    # a git remote and therefore in any transcript that echoed one.
     re.compile(r"(?<=://)([^/\s:@]+):([^/\s@]+)(?=@)"),
 ]
-
-# Assignment-shaped secrets: redact only the value, keep the name so the
-# surrounding text still reads.
-_SECRET_ASSIGNMENT = re.compile(
+_LEGACY_ASSIGNMENT = re.compile(
     r"(?i)\b(api[_-]?key|secret|password|passwd|token)\b(\s*[=:]\s*[\"']?)"
     r"([A-Za-z0-9/+=_\-]{16,})",
 )
+
+
+def _legacy_redact(text):
+    for pattern in _LEGACY_PATTERNS[:-1]:
+        text = pattern.sub(REDACTED, text)
+    text = _LEGACY_PATTERNS[-1].sub(r"\1:" + REDACTED, text)
+    text = _LEGACY_ASSIGNMENT.sub(r"\1\2" + REDACTED, text)
+    retval = text
+    return retval
+
+
+# (pattern, group): the group whose span is the secret; 0 is the whole match.
+_SPAN_PATTERNS = [
+    (re.compile(r"github_pat_[A-Za-z0-9_]{20,}"), 0),
+    (re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"), 0),
+    (re.compile(r"glpat-[A-Za-z0-9\-_]{20,}"), 0),
+    # Slack: xox?- are bot/user/app tokens, xapp- is an app-level token,
+    # which is a different shape and is easy to miss.
+    (re.compile(r"xox[baprse]-[A-Za-z0-9\-]{10,}"), 0),
+    (re.compile(r"xapp-[0-9]-[A-Za-z0-9\-]{10,}"), 0),
+    (re.compile(r"(?:AKIA|ASIA)[0-9A-Z]{16}"), 0),
+    # OpenAI: legacy sk- keys, and project/service-account/admin keys whose
+    # sk-proj- style prefix carries a hyphen the legacy form does not allow.
+    (re.compile(r"sk-[A-Za-z0-9]{20,}"), 0),
+    (re.compile(r"sk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{20,}"), 0),
+    # JWTs: compact JWS whose header is base64url JSON. '{' followed by '"',
+    # a space, a tab or a newline encodes as "ey" or "ew". The payload is not
+    # assumed ({} is e30). The lookbehind keeps failed matches from rescanning.
+    (re.compile(r"(?<![A-Za-z0-9_\-])e[wy][A-Za-z0-9_\-]{14,}\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]{10,}"), 0),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.DOTALL), 0),
+    # URLs of the form scheme://user:secret@host, which is how a PAT ends up in
+    # a git remote and therefore in any transcript that echoed one.
+    (re.compile(r"(?<=://)([^/\s:@]+):([^/\s@]+)(?=@)"), 2),
+    # Authorization: Bearer <token>. Scoped to the header; whatever follows the
+    # scheme is a credential, however short. Prose shaped exactly like the
+    # header is over-redacted, the cheaper error.
+    (re.compile(r"(?i)\bauthorization[\"']?\s*[:=]\s*[\"']?bearer\s+([^\s\"']+)"), 1),
+    # Assignment-shaped secrets, as shipped in #53: value only, name kept.
+    (re.compile(r"(?i)\b(api[_-]?key|secret|password|passwd|token)\b(\s*[=:]\s*[\"']?)([A-Za-z0-9/+=_\-]{16,})"), 3),
+    # Assignments with a quoted value: everything to the matching unescaped
+    # quote, however short (passphrases with spaces, escaped quotes). The name
+    # may carry a prefix (API_TOKEN, DB_PASSWORD) and the key may be quoted.
+    (re.compile(
+        r"(?i)\b(?:[a-z0-9]+_)*(?:api[_-]?key|secret|password|passwd|token)\b"
+        r"[\"']?\s*[=:]\s*([\"'])((?:\\.|(?!\1)[^\\\n])+)(?=\1)"
+    ), 2),
+]
+
+# A credential glued to the next key (ghp_...token=value) is consumed whole,
+# label included, so the value is left with only a marker in front of it. A
+# marker directly followed by an assignment operator therefore means "a key was
+# eaten here": redact the value too.
+# The token may eat only part of the label (ghp_...API_TOKEN= leaves _TOKEN),
+# so leftover name characters between the marker and the operator are allowed.
+_EATEN = re.escape(REDACTED) + r"[A-Za-z0-9_\-]*[\"']?\s*"
+_SPAN_PATTERNS.append((
+    re.compile(_EATEN + r"[=:]\s*[\"']?([^\s\"',;<>]{1,})"),
+    1,
+))
+# An eaten "Authorization" label: the credential follows "Bearer".
+_SPAN_PATTERNS.append((
+    re.compile(_EATEN + r"[:=]\s*[\"']?(?i:bearer)\s+([^\s\"']+)"),
+    1,
+))
+# ...and the same with a quoted value, taken to the matching unescaped quote.
+_SPAN_PATTERNS.append((
+    re.compile(_EATEN + r"[=:]\s*([\"'])((?:\\.|(?!\1)[^\\\n])+)(?=\1)"),
+    2,
+))
+
+# Assignments with an unquoted value (or a quote that never closes, e.g. a
+# truncated line). The value runs to whitespace or a delimiter, so password
+# punctuation (p@ss!word) is kept whole. Filtered in _unquoted_spans, not in
+# the regex, to stay linear.
+_UNQUOTED_ASSIGNMENT = re.compile(
+    r"(?i)\b(?:[a-z0-9]+_)*(?:api[_-]?key|secret|password|passwd|token)\b"
+    r"[\"']?\s*[=:]\s*[\"']?([^\s\"',;<>]{8,})"
+)
+# Code, not a credential: a call on an identifier chain (lexer.next_token()).
+# Plain attribute access (response.access_token) is deliberately NOT exempt:
+# letter-only passwords exist, and a false positive is the cheaper error.
+_CALL_EXPRESSION = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*\(\)?")
+
+
+def _unquoted_spans(text):
+    spans = []
+    for match in _UNQUOTED_ASSIGNMENT.finditer(text):
+        if _CALL_EXPRESSION.fullmatch(match.group(1)):
+            continue
+        spans.append(match.span(1))
+    retval = spans
+    return retval
 
 
 def redact_secrets(text: str) -> str:
@@ -142,11 +233,41 @@ def redact_secrets(text: str) -> str:
     little readability in a stored memory, a false negative persists a live
     credential in an embedded, searchable store.
     """
-    for pattern in _SECRET_PATTERNS[:-1]:
-        text = pattern.sub(REDACTED, text)
-    text = _SECRET_PATTERNS[-1].sub(r"\1:" + REDACTED, text)
-    text = _SECRET_ASSIGNMENT.sub(r"\1\2" + REDACTED, text)
-    retval = text
+    # Matches of one pattern cannot overlap, so a value that runs straight into
+    # the next key ("...cdeaeX-Api-Key: ...") hides that second assignment from
+    # the first pass. A pass only ever inserts markers, which break such runs,
+    # so repeat until nothing changes; each pass is linear.
+    retval = _legacy_redact(text)
+    for _ in range(4):
+        redacted = _redact_pass(retval)
+        if redacted == retval:
+            break
+        retval = redacted
+    return retval
+
+
+def _redact_pass(text):
+    spans = []
+    for pattern, group in _SPAN_PATTERNS:
+        for match in pattern.finditer(text):
+            spans.append(match.span(group))
+    spans.extend(_unquoted_spans(text))
+
+    merged = []
+    for begin, end in sorted(s for s in spans if s[1] > s[0]):
+        if merged and begin <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([begin, end])
+
+    pieces = []
+    cursor = 0
+    for begin, end in merged:
+        pieces.append(text[cursor:begin])
+        pieces.append(REDACTED)
+        cursor = end
+    pieces.append(text[cursor:])
+    retval = "".join(pieces)
     return retval
 
 
