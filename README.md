@@ -233,6 +233,8 @@ What to set it to:
 | Local Python (`make run`) | `http://localhost:8000` |
 | Behind a reverse proxy or on a server | the public URL users open, e.g. `https://rag.example.com` |
 
+Serve voitta-rag at the root of its host (`https://rag.example.com`), not under a subpath (`https://example.com/rag`). The web UI uses absolute paths such as `/static/` and `/browse`, so a subpath mount breaks the UI even if `VOITTA_BASE_URL` includes the path.
+
 How `get_file_uri` picks its base, highest priority first:
 
 1. the `X-Server-Host` request header, if the MCP client sends one;
