@@ -210,9 +210,37 @@ MS_AUTH_CLIENT_SECRET=
 GOOGLE_AUTH_CLIENT_ID=
 GOOGLE_AUTH_CLIENT_SECRET=
 
-# Base URL for OAuth redirect callbacks
-VOITTA_BASE_URL=https://your-domain.com
+# URL where users and agents reach this instance: the base of get_file_uri
+# links and of OAuth redirect URIs. Must be reachable, not a placeholder.
+# See "VOITTA_BASE_URL" below. Docker on this machine:
+VOITTA_BASE_URL=http://127.0.0.1:58000
 ```
+
+### VOITTA_BASE_URL
+
+`VOITTA_BASE_URL` is the address at which people and agents reach this voitta-rag instance. It is used to build:
+
+- **Every link `get_file_uri` returns:** `{VOITTA_BASE_URL}/api/raw/<path>`. These are the links an agent cites for a search result.
+- **OAuth redirect URIs:** `{VOITTA_BASE_URL}/auth/microsoft/callback` and `{VOITTA_BASE_URL}/auth/google/callback` for login, and `{VOITTA_BASE_URL}/api/sync/oauth/callback` for the sync connectors (SharePoint, Google Drive, Box, Azure DevOps).
+
+**Do not leave a placeholder such as `https://your-domain.com` in place.** voitta-rag does not check the value. Indexing and search keep working, but every `get_file_uri` link points at a host that doesn't exist, so every file an agent cites is a broken link.
+
+What to set it to:
+
+| Install | Value |
+|---|---|
+| Docker Compose on your machine | `http://127.0.0.1:58000`, or `http://127.0.0.1:<DOCKER_PORT>` if you changed `DOCKER_PORT` |
+| Local Python (`make run`) | `http://localhost:8000` |
+| Behind a reverse proxy or on a server | the public URL users open, e.g. `https://rag.example.com` |
+
+How `get_file_uri` picks its base, highest priority first:
+
+1. the `X-Server-Host` request header, if the MCP client sends one;
+2. `VOITTA_BASE_URL`. If unset, it defaults to `http://localhost:<VOITTA_PORT>`, which is `http://localhost:8000`.
+
+That default is right for local Python but wrong under Docker: 8000 is the container's internal port, and the host reaches it as 58000. So Docker installs must set `VOITTA_BASE_URL`.
+
+Changing the value takes effect after a restart (`docker compose up -d voitta-rag`). OAuth app registrations must list the redirect URIs that match it.
 
 ### Authentication
 
